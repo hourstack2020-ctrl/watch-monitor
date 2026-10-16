@@ -161,7 +161,7 @@ def change_of(old,item):
         return 'price_down' if price<before else 'price_up'
     if previous_status=='possibly_removed':return 'returned'
     if (before,title,model,year,condition)!=(price,item['title'],item['model'],item['year'],item['condition']):return 'changed'
-    return 'unchanged'
+    return previous_status if previous_status in {'new','price_up','price_down','changed','returned'} else 'unchanged'
 
 def product_images(soup,page_url):
     images={}
