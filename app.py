@@ -2,7 +2,7 @@ import os, re, json, time, hmac, hashlib, logging, urllib.parse, subprocess, sys
 from datetime import datetime, timezone, date, timedelta
 from zoneinfo import ZoneInfo
 from functools import wraps
-from flask import Flask, request, jsonify, Response, send_file
+from flask import Flask, request, jsonify, Response, send_file, session
 import requests, psycopg
 import base64
 from pwa_assets import ICONS, SERVICE_WORKER
@@ -10,6 +10,7 @@ import push_notifications as push
 from bs4 import BeautifulSoup
 
 app=Flask(__name__)
+app.config.update(SECRET_KEY=os.getenv('SESSION_SECRET'),SESSION_COOKIE_NAME='hs_session',SESSION_COOKIE_SECURE=True,SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Lax',PERMANENT_SESSION_LIFETIME=timedelta(days=30))
 logging.basicConfig(level=logging.INFO)
 BASELINE_SITE='鐘點站'
 SITES={'鐘點站':'https://www.hourstack.com.tw/product.asp','永生':'https://www.egps.com.tw/','玩錶舍':'https://www.playwatch.com.tw/','雷達站':'https://www.rdwatch.com.tw/'}
@@ -36,16 +37,21 @@ def init_db():
         c.execute("""CREATE TABLE IF NOT EXISTS listing_events(id BIGSERIAL PRIMARY KEY,site TEXT NOT NULL,url TEXT NOT NULL,event_type TEXT NOT NULL,title TEXT,brand TEXT,model TEXT,year TEXT,condition TEXT,price BIGINT,image_url TEXT,detected_at TIMESTAMPTZ NOT NULL DEFAULT now(),snapshot_source TEXT NOT NULL DEFAULT 'observed')""")
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_listing_first_seen ON listing_events(site,url) WHERE event_type IN ('initial','listed')")
 
+def session_auth_version():
+    return hmac.new((app.secret_key or '').encode(),os.environ.get('ADMIN_PASSWORD','').encode(),hashlib.sha256).hexdigest()
+
 def auth_ok():
     secret=os.environ.get('ADMIN_PASSWORD','')
+    if not secret:return False
     credentials=request.authorization
-    if not credentials or credentials.type.lower()!='basic':return False
-    return bool(secret) and hmac.compare_digest((credentials.username or '').encode('utf-8'),b'HS') and hmac.compare_digest((credentials.password or '').encode('utf-8'),secret.encode('utf-8'))
+    if credentials and credentials.type.lower()=='basic':
+        if hmac.compare_digest((credentials.username or '').encode('utf-8'),b'HS') and hmac.compare_digest((credentials.password or '').encode('utf-8'),secret.encode('utf-8')):return True
+    return bool(app.secret_key and session.get('user')=='HS' and hmac.compare_digest(session.get('auth_version',''),session_auth_version()))
 
 def protected(fn):
     @wraps(fn)
     def inner(*a,**kw):
-        if not auth_ok():return Response('請輸入管理員密碼',401,{'WWW-Authenticate':'Basic realm="Watch Monitor"'})
+        if not auth_ok():return jsonify({'error':'登入已過期，請重新開啟 App 登入'}),401
         return fn(*a,**kw)
     return inner
 
@@ -347,8 +353,19 @@ def ready():
         return {'ok':False,'database':'unavailable'},503
 
 @app.get('/')
-@protected
-def home():return send_file('index.html')
+def home():return send_file('index.html' if auth_ok() else 'login.html')
+
+@app.post('/api/login')
+def login():
+    if request.headers.get('X-Watch-Monitor')!='1':return jsonify({'error':'Missing request header'}),403
+    if not app.secret_key:return jsonify({'error':'登入服務正在更新，請稍後重試'}),503
+    body=request.get_json(silent=True) or {}
+    if not isinstance(body,dict):return jsonify({'error':'帳號或密碼不正確'}),401
+    username=body.get('username');password=body.get('password');secret=os.getenv('ADMIN_PASSWORD','')
+    if not isinstance(username,str) or not isinstance(password,str) or not secret or len(username)>100 or len(password)>256:return jsonify({'error':'帳號或密碼不正確'}),401
+    if not hmac.compare_digest(username.encode(),b'HS') or not hmac.compare_digest(password.encode(),secret.encode()):return jsonify({'error':'帳號或密碼不正確'}),401
+    session.clear();session.permanent=True;session['user']='HS';session['auth_version']=session_auth_version()
+    return jsonify({'ok':True})
 
 @app.get('/api/watches')
 @protected
