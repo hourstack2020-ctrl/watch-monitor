@@ -55,12 +55,19 @@ def model_of(t):
         'Patek Philippe':r'(?<![A-Z0-9])\d{4}(?:/[A-Z0-9]+|[A-Z])(?:-\d{3})?(?![A-Z0-9])',
         'Audemars Piguet':r'(?<![A-Z0-9])\d{5}[A-Z]{2}(?:\.[A-Z0-9]+){0,4}(?![A-Z0-9])',
         'Jaeger-LeCoultre':r'(?<![A-Z0-9])Q\d[A-Z0-9]{5,9}(?![A-Z0-9])',
+        'Longines':r'(?<![A-Z0-9])L(?:\d(?:\.\d{1,4}){3,5}|\d{7,13})(?![A-Z0-9])',
+        'Breitling':r'(?<![A-Z0-9])[A-Z]{1,3}\d[A-Z0-9]{8,16}(?![A-Z0-9])',
+        'Grand Seiko':r'(?<![A-Z0-9])[A-Z]{4}\d{3}(?![A-Z0-9])',
+        'Glashütte Original':r'(?<![A-Z0-9])(?:[12](?:[-.]\d{2}){5}|[12]\d{10})(?![A-Z0-9])',
+        'Hublot':r'(?<![A-Z0-9])\d{3}\.[A-Z0-9]{2}\.\d{4}\.[A-Z0-9]{2}(?:\.[A-Z0-9]+){0,3}(?![A-Z0-9])',
     }
     if brand in patterns:
         match=re.search(patterns[brand],u)
         return re.sub(r'\s+','',match.group()) if match else ''
     for m in MODEL.finditer(t):
         s=m.group().upper()
+        if m.start()>0 and t[m.start()-1] in './-':continue
+        if m.end()<len(t) and t[m.end()] in './-':continue
         if not re.fullmatch(r'20\d{2}|\d{2,3}MM|\d{1,3}',s):return s
     return ''
 
