@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: watch-monitor-web
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 2 app:app
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+  - type: cron
+    name: watch-monitor-crawler
+    runtime: python
+    plan: starter
+    schedule: "0 */12 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py crawl
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: MAX_PAGES_PER_SITE
+        value: "30"
+      - key: CRAWL_DELAY_SECONDS
+        value: "2"
