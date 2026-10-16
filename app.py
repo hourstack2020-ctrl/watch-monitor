@@ -91,10 +91,32 @@ def condition_grade(value):
     m=re.match(r'(\d\.\d{1,2})成新',value)
     return m[1]+'成新' if m else ''
 
+def strap_of(title):
+    title=re.sub(r'\s+','',title).upper()
+    styles=[]
+    for pattern,label in [
+        (r'五[株銖珠]|JUBILEE|紀念型(?:錶帶|鏈帶|鍊帶|帶)', '五株鍊帶'),
+        (r'三[板版節](?:式|型)?(?:錶帶|鏈帶|鍊帶|帶)|蠔式(?:[（(]OYSTER[）)])?(?:錶帶|鏈帶|鍊帶|三節錶帶)|OYSTERBRACELET', '三板蠔式鍊帶'),
+        (r'總統型(?:錶帶|鏈帶|鍊帶)|PRESIDENTBRACELET', '總統型鍊帶'),
+        (r'米蘭(?:編織)?(?:錶帶|鏈帶|鍊帶)|MILANESE', '米蘭鍊帶'),
+    ]:
+        if re.search(pattern,title):styles.append(label)
+    # Leather/rubber/textile need explicit material and color, rather than
+    # grouping every strap of that material together. Mixed/additional straps
+    # remain unverified and are excluded.
+    soft=re.findall(r'(黑|白|深藍|淺藍|天藍|藍|深棕|棕|咖啡|褐|綠|灰|紅)(?:色)?(鱷魚皮|鱷魚皮革|小牛皮|牛皮|橡膠|膠|尼龍|織物|織紋|帆布)(?:革)?(?:錶帶|帶)',title)
+    for color,material in soft:
+        material={'鱷魚皮革':'鱷魚皮','褐':'棕','膠':'橡膠'}.get(material,material)
+        color={'褐':'棕'}.get(color,color)
+        styles.append(color+'色'+material+'錶帶')
+    if re.search(r'皮(?:革)?錶帶|膠(?:錶)?帶|尼龍|帆布|織紋錶帶',title) and not soft:return ''
+    if re.search(r'副廠|改裝|另附|另贈|替換錶帶|更換錶帶',title):return ''
+    return styles[0] if len(set(styles))==1 else ''
+
 def comparison_attributes(item):
     title=item.get('title') or ''
     years=set(re.findall(r'(20\d{2})年(?:新式|木紋|電子|新式木紋)*(?:保卡|保單|保證書)',title))
-    return (dial_color_of(title),next(iter(years)) if len(years)==1 else '',condition_grade(item.get('condition')))
+    return (dial_color_of(title),next(iter(years)) if len(years)==1 else '',condition_grade(item.get('condition')),strap_of(title))
 
 def comparison_key(item):
     brand=brand_of(item['title'])
@@ -120,7 +142,7 @@ def lower_price_items(rows):
         own=baseline.get(key)
         if own and row['price']<own['price']:
             difference=own['price']-row['price']
-            matches.append({'brand':key[0],'model':model_of(row['title']),'dial_color':key[2],'year':key[3],'condition_grade':key[4],'competitor':row,'baseline':own,'difference':difference,'difference_percent':round(100*difference/own['price'],1)})
+            matches.append({'brand':key[0],'model':model_of(row['title']),'dial_color':key[2],'year':key[3],'condition_grade':key[4],'strap':key[5],'competitor':row,'baseline':own,'difference':difference,'difference_percent':round(100*difference/own['price'],1)})
     return {'baseline_models':len(baseline),'items':sorted(matches,key=lambda x:(-x['difference'],-x['difference_percent'],x['competitor']['url']))}
 
 def change_of(old,item):
