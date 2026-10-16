@@ -7,9 +7,11 @@ from bs4 import BeautifulSoup
 
 app=Flask(__name__)
 logging.basicConfig(level=logging.INFO)
-SITES={'永生':'https://www.egps.com.tw/','玩錶舍':'https://www.playwatch.com.tw/','雷達站':'https://www.rdwatch.com.tw/'}
+BASELINE_SITE='鐘點站'
+SITES={'鐘點站':'https://www.hourstack.com.tw/product.asp','永生':'https://www.egps.com.tw/','玩錶舍':'https://www.playwatch.com.tw/','雷達站':'https://www.rdwatch.com.tw/'}
 BRANDS={'ROLEX':'Rolex','PATEK PHILIPPE':'Patek Philippe','AUDEMARS PIGUET':'Audemars Piguet','OMEGA':'Omega','CARTIER':'Cartier','IWC':'IWC','HUBLOT':'Hublot','GRAND SEIKO':'Grand Seiko','CHOPARD':'Chopard','ZENITH':'Zenith','RICHARD MILLE':'Richard Mille','VACHERON CONSTANTIN':'Vacheron Constantin','JAEGER':'Jaeger-LeCoultre','FRANCK MULLER':'Franck Muller','TUDOR':'Tudor','PANERAI':'Panerai','BVLGARI':'Bvlgari','朗格':'A. Lange & Söhne'}
 MODEL=re.compile(r'(?<![A-Za-z0-9])(?:[A-Z]{0,5}\d{3,8}[A-Z]{0,5}(?:[./-][A-Z0-9]{1,12}){0,4}|\d{2,6}[./-][A-Z0-9]{2,10}(?:[./-][A-Z0-9]{2,12}){0,3})(?![A-Za-z0-9])',re.I)
+BRANDS.update({'GRANDSEIKO':'Grand Seiko','BLANCPAIN':'Blancpain','BREGUET':'Breguet','BREITLING':'Breitling','BOVET':'Bovet','BELL & ROSS':'Bell & Ross','CHANEL':'Chanel','DIOR':'Dior','DANIEL ROTH':'Daniel Roth','GIRARD':'Girard-Perregaux','GLASHUTTE':'Glashütte Original','格拉蘇蒂':'Glashütte Original','MOSER':'H. Moser & Cie.','HAUTLENCE':'Hautlence','JAQUET DROZ':'Jaquet Droz','JACOB':'Jacob & Co.','LONGINES':'Longines','MONTBLANC':'Montblanc','MAURICE LACROIX':'Maurice Lacroix','MIDO':'Mido','ORIS':'Oris','PARMIGIANI':'Parmigiani Fleurier','PIAGET':'Piaget','ROGER DUBUIS':'Roger Dubuis','SEIKO':'Seiko','TAG HEUER':'TAG Heuer','ULYSSE NARDIN':'Ulysse Nardin'})
 
 def connect():
     return psycopg.connect(os.environ['DATABASE_URL'],autocommit=False,connect_timeout=15,prepare_threshold=None)
@@ -38,13 +40,54 @@ def protected(fn):
 
 def brand_of(t):
     u=t.upper()
-    return next((v for k,v in BRANDS.items() if k in u),'其他')
+    matches=[(u.index(k),-len(k),v) for k,v in BRANDS.items() if k in u]
+    return min(matches)[2] if matches else '其他'
 
 def model_of(t):
+    u=t.upper()
+    brand=brand_of(t)
+    patterns={
+        'Rolex':r'(?<![A-Z0-9])\d{5,6}[A-Z]{0,6}(?![A-Z0-9])',
+        'Omega':r'(?<![A-Z0-9])(?:\d{3}\.\d{2}\.\d{2}\.\d{2}\.\d{2}\.\d{3}|\d{14})(?![A-Z0-9])',
+        'IWC':r'(?<![A-Z0-9])IW\d{6}(?![A-Z0-9])',
+        'Cartier':r'(?<![A-Z0-9])W[A-Z0-9]{7}(?![A-Z0-9])',
+        'Panerai':r'(?<![A-Z0-9])PAM\s*\d{3,6}(?![A-Z0-9])',
+        'Patek Philippe':r'(?<![A-Z0-9])\d{4}(?:/[A-Z0-9]+|[A-Z])(?:-\d{3})?(?![A-Z0-9])',
+        'Audemars Piguet':r'(?<![A-Z0-9])\d{5}[A-Z]{2}(?:\.[A-Z0-9]+){0,4}(?![A-Z0-9])',
+        'Jaeger-LeCoultre':r'(?<![A-Z0-9])Q\d[A-Z0-9]{5,9}(?![A-Z0-9])',
+    }
+    if brand in patterns:
+        match=re.search(patterns[brand],u)
+        return re.sub(r'\s+','',match.group()) if match else ''
     for m in MODEL.finditer(t):
         s=m.group().upper()
-        if not re.fullmatch(r'20\d{2}|\d{2,3}MM',s):return s
+        if not re.fullmatch(r'20\d{2}|\d{2,3}MM|\d{1,3}',s):return s
     return ''
+
+def comparison_key(item):
+    brand=brand_of(item['title'])
+    reference=model_of(item['title'])
+    if not reference or brand=='其他':return None
+    normalized=re.sub(r'[^A-Z0-9]','',reference.upper())
+    if brand=='Panerai':normalized='PAM'+str(int(normalized[3:]))
+    return brand,normalized
+
+def lower_price_items(rows):
+    baseline={};active=[]
+    for row in rows:
+        if row.get('missing_runs',0)>0 or row.get('status')=='possibly_removed' or not row.get('price') or row['price']<=0:continue
+        key=comparison_key(row)
+        if not key:continue
+        if row['site']==BASELINE_SITE:
+            if key not in baseline or row['price']<baseline[key]['price']:baseline[key]=row
+        else:active.append((key,row))
+    matches=[]
+    for key,row in active:
+        own=baseline.get(key)
+        if own and row['price']<own['price']:
+            difference=own['price']-row['price']
+            matches.append({'brand':key[0],'model':model_of(row['title']),'competitor':row,'baseline':own,'difference':difference,'difference_percent':round(100*difference/own['price'],1)})
+    return {'baseline_models':len(baseline),'items':sorted(matches,key=lambda x:(-x['difference'],-x['difference_percent'],x['competitor']['url']))}
 
 def change_of(old,item):
     if old is None:return 'new'
@@ -192,6 +235,15 @@ def watches():
 def status():
     with connect() as c:r=c.execute('SELECT finished,status,count,errors FROM crawl_runs ORDER BY id DESC LIMIT 1').fetchone()
     return jsonify({'running':bool(r and r[0] is None),'last_run':r[0].isoformat() if r and r[0] else None,'count':r[2] if r else 0,'error':r[3] if r else None,'run_status':r[1] if r else 'never'})
+
+@app.get('/api/comparisons')
+@protected
+def comparisons():
+    with connect() as c:
+        records=c.execute('SELECT site,url,title,brand,model,year,condition,price,image_url,updated,status,missing_runs FROM watches WHERE price > 0 AND missing_runs=0').fetchall()
+    fields=['site','url','title','brand','model','year','condition','price','image_url','updated','status','missing_runs']
+    rows=[dict(zip(fields,[v.isoformat() if isinstance(v,datetime) else v for v in r])) for r in records]
+    return jsonify(lower_price_items(rows))
 
 @app.get('/api/history')
 @protected
