@@ -18,8 +18,8 @@
 - Render Web Service：hourstack-watch-monitor（Singapore、免費方案）。閒置後首次開啟可能需約一分鐘。
 - Supabase：watch-monitor（Tokyo）。watches、history、crawl_runs、removal_events 四張資料表均啟用 RLS；anon/authenticated 不可存取。
 - 後端專用 watch_monitor_app 角色僅可讀寫監控資料，不使用資料庫管理員帳號。
-- 目標排程：`0 1,4-11 * * *`（UTC），台灣每天 09:00、12:00、13:00、14:00、15:00、16:00、17:00、18:00、19:00，共 9 次。
-- Render Cron：hourstack-watch-crawler 已啟用（Singapore、Starter），每月最低 US$1。render.yaml 已改為台灣 09:00 與 12:00～19:00 每整點；既有服務排程須在 Render 後台同步修改，Git 推送不會直接套用。
+- 目標排程：`0 3-11 * * *`（UTC），台灣每天 11:00、12:00、13:00、14:00、15:00、16:00、17:00、18:00、19:00，共 9 次。
+- Render Cron：hourstack-watch-crawler 已啟用（Singapore、Starter），每月最低 US$1。render.yaml 已改為台灣 11:00～19:00 每整點；既有服務排程須在 Render 後台同步修改，Git 推送不會直接套用。
 
 ## 環境變數（僅設定於 Render，勿提交秘密）
 - DATABASE_URL：Supabase Session Pooler URI，專用角色，SSL 必須啟用。
