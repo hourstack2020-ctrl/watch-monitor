@@ -26,6 +26,8 @@ def init_db():
         c.execute('CREATE INDEX IF NOT EXISTS ix_watch_model ON watches(model)')
         c.execute('CREATE INDEX IF NOT EXISTS ix_history_url ON history(site,url,checked DESC)')
         c.execute('ALTER TABLE watches ADD COLUMN IF NOT EXISTS image_url TEXT')
+        c.execute('ALTER TABLE watches ADD COLUMN IF NOT EXISTS source_order INTEGER')
+        c.execute('ALTER TABLE watches ADD COLUMN IF NOT EXISTS price_changed_at TIMESTAMPTZ')
         c.execute('''CREATE TABLE IF NOT EXISTS removal_events(id BIGSERIAL PRIMARY KEY,site TEXT NOT NULL,url TEXT NOT NULL,title TEXT,brand TEXT,model TEXT,year TEXT,condition TEXT,price BIGINT,image_url TEXT,last_seen TIMESTAMPTZ,detected_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
         c.execute('CREATE INDEX IF NOT EXISTS ix_removal_events_detected ON removal_events(detected_at DESC,site)')
 
@@ -239,7 +241,7 @@ def _crawl():
     with requests.Session() as session:
         session.headers.update({'User-Agent':'WatchPriceMonitor/1.0 (public product listings; contact site owner for removal)'})
         for site,root in SITES.items():
-            queue=[root];visited=set();seen=set();site_errors=[]
+            queue=[root];visited=set();seen={};site_errors=[]
             maxpages=max(1,min(int(os.getenv('MAX_PAGES_PER_SITE','200')),200))
             while queue and len(visited)<maxpages:
                 url=queue.pop(0)
@@ -254,13 +256,13 @@ def _crawl():
                     writes=[];price_changes=[]
                     for x in rows:
                         if x['url'] in seen:continue
-                        seen.add(x['url'])
+                        seen[x['url']]=len(seen)+1
                         old=previous.get(x['url'])
                         change=change_of(old,x)
                         writes.append((x['site'],x['url'],x['title'],x['brand'],x['model'],x['year'],x['condition'],x['price'],x['price_text'],now,now,change,x['image_url']))
                         if x['price'] is not None and (old is None or old[0]!=x['price']):price_changes.append((site,x['url'],x['price'],now))
                     with c.cursor() as cur:
-                        cur.executemany('''INSERT INTO watches(site,url,title,brand,model,year,condition,price,price_text,updated,last_seen,status,image_url,missing_runs) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0) ON CONFLICT(site,url) DO UPDATE SET title=EXCLUDED.title,brand=EXCLUDED.brand,model=EXCLUDED.model,year=EXCLUDED.year,condition=EXCLUDED.condition,price=EXCLUDED.price,price_text=EXCLUDED.price_text,updated=EXCLUDED.updated,last_seen=EXCLUDED.last_seen,status=EXCLUDED.status,image_url=COALESCE(NULLIF(EXCLUDED.image_url,''),watches.image_url),missing_runs=0''',writes)
+                        cur.executemany('''INSERT INTO watches(site,url,title,brand,model,year,condition,price,price_text,updated,last_seen,status,image_url,missing_runs) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0) ON CONFLICT(site,url) DO UPDATE SET title=EXCLUDED.title,brand=EXCLUDED.brand,model=EXCLUDED.model,year=EXCLUDED.year,condition=EXCLUDED.condition,price_changed_at=CASE WHEN watches.price IS NOT NULL AND EXCLUDED.price IS NOT NULL AND watches.price<>EXCLUDED.price THEN EXCLUDED.updated ELSE watches.price_changed_at END,price=EXCLUDED.price,price_text=EXCLUDED.price_text,updated=EXCLUDED.updated,last_seen=EXCLUDED.last_seen,status=EXCLUDED.status,image_url=COALESCE(NULLIF(EXCLUDED.image_url,''),watches.image_url),missing_runs=0''',writes)
                         cur.executemany('INSERT INTO history(site,url,price,checked) VALUES(%s,%s,%s,%s)',price_changes)
                 for a in soup.find_all('a',href=True):
                     if re.fullmatch(r'\d{1,3}',a.get_text(' ',strip=True)):
@@ -275,6 +277,9 @@ def _crawl():
             if site_errors:errors.extend(f'{site}: {e}' for e in site_errors[:3])
             if not site_errors and not queue and seen:
                 with connect() as c:
+                    c.execute("""UPDATE watches w SET source_order=listing.position FROM
+                        unnest(%s::text[]) WITH ORDINALITY AS listing(url,position)
+                        WHERE w.site=%s AND w.url=listing.url""",(list(seen),site))
                     record_missing(c,site,run_started)
     with connect() as c:
         c.execute('UPDATE crawl_runs SET finished=now(),status=%s,count=%s,errors=%s WHERE id=%s',('partial' if errors else 'completed',total,'; '.join(errors),runid))
@@ -301,8 +306,8 @@ def home():return send_file('index.html')
 @protected
 def watches():
     with connect() as c:
-        rows=c.execute('SELECT site,url,title,brand,model,year,condition,price,price_text,updated,status,image_url FROM watches ORDER BY updated DESC LIMIT 20000').fetchall()
-    return jsonify([dict(zip(['site','url','title','brand','model','year','condition','price','price_text','updated','status','image_url'],[v.isoformat() if isinstance(v,datetime) else v for v in r])) for r in rows])
+        rows=c.execute("SELECT site,url,title,brand,model,year,condition,price,price_text,updated,status,image_url,source_order,price_changed_at,missing_runs FROM watches ORDER BY price_changed_at DESC NULLS LAST,CASE site WHEN '鐘點站' THEN 0 WHEN '永生' THEN 1 WHEN '玩錶舍' THEN 2 WHEN '雷達站' THEN 3 ELSE 4 END,source_order NULLS LAST,url LIMIT 20000").fetchall()
+    return jsonify([dict(zip(['site','url','title','brand','model','year','condition','price','price_text','updated','status','image_url','source_order','price_changed_at','missing_runs'],[v.isoformat() if isinstance(v,datetime) else v for v in r])) for r in rows])
 
 @app.get('/api/status')
 @protected
