@@ -123,7 +123,8 @@ def strap_of(title):
 
 def comparison_attributes(item):
     title=item.get('title') or ''
-    return dial_color_of(title),strap_of(title)
+    years=set(re.findall(r'(20\d{2})\s*年\s*(?:(?:新式|木紋|電子)\s*)*(?:保卡|保單|保證書)',title))
+    return dial_color_of(title),(next(iter(years)) if len(years)==1 else ''),strap_of(title)
 
 def comparison_key(item):
     brand=brand_of(item['title'])
@@ -149,7 +150,7 @@ def lower_price_items(rows):
         own=baseline.get(key)
         if own and row['price']<own['price']:
             difference=own['price']-row['price']
-            matches.append({'brand':key[0],'model':model_of(row['title']),'dial_color':key[2],'strap':key[3],'competitor':row,'baseline':own,'difference':difference,'difference_percent':round(100*difference/own['price'],1)})
+            matches.append({'brand':key[0],'model':model_of(row['title']),'dial_color':key[2],'year':key[3],'strap':key[4],'competitor':row,'baseline':own,'difference':difference,'difference_percent':round(100*difference/own['price'],1)})
     return {'baseline_models':len(baseline),'items':sorted(matches,key=lambda x:(-x['difference'],-x['difference_percent'],x['competitor']['url']))}
 
 def change_of(old,item):
