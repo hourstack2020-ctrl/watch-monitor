@@ -31,8 +31,9 @@ def init_db():
 
 def auth_ok():
     secret=os.environ.get('ADMIN_PASSWORD','')
-    supplied=request.authorization.password if request.authorization and request.authorization.type.lower()=='basic' else ''
-    return bool(secret) and hmac.compare_digest(supplied,secret)
+    credentials=request.authorization
+    if not credentials or credentials.type.lower()!='basic':return False
+    return bool(secret) and hmac.compare_digest((credentials.username or '').encode('utf-8'),b'HS') and hmac.compare_digest((credentials.password or '').encode('utf-8'),secret.encode('utf-8'))
 
 def protected(fn):
     @wraps(fn)
