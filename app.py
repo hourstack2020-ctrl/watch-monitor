@@ -4,6 +4,8 @@ from zoneinfo import ZoneInfo
 from functools import wraps
 from flask import Flask, request, jsonify, Response, send_file
 import requests, psycopg
+import base64
+from pwa_assets import ICONS, SERVICE_WORKER
 from bs4 import BeautifulSoup
 
 app=Flask(__name__)
@@ -305,6 +307,27 @@ def _crawl():
         c.execute('UPDATE crawl_runs SET finished=now(),status=%s,count=%s,errors=%s WHERE id=%s',('partial' if errors else 'completed',total,'; '.join(errors),runid))
     if errors:raise RuntimeError('Crawl incomplete: '+'; '.join(errors))
     return total
+
+@app.get('/manifest.webmanifest')
+def manifest():
+    data={'id':'/','name':'鐘點站名錶監控','short_name':'鐘點站監控','lang':'zh-TW','start_url':'/','scope':'/','display':'standalone','background_color':'#152337','theme_color':'#152337','icons':[
+        {'src':f'/app-icon-{size}.png','sizes':f'{size}x{size}','type':'image/png','purpose':'any maskable'} for size in [192,512]]}
+    return Response(json.dumps(data,ensure_ascii=False),mimetype='application/manifest+json',headers={'Cache-Control':'no-cache'})
+
+@app.get('/app-icon-<int:size>.png')
+def app_icon(size):
+    if size not in ICONS:return Response('Not found',404)
+    return Response(base64.b64decode(ICONS[size]),mimetype='image/png',headers={'Cache-Control':'public, max-age=86400'})
+
+@app.get('/service-worker.js')
+def service_worker():
+    return Response(SERVICE_WORKER,mimetype='application/javascript',headers={'Cache-Control':'no-cache','Service-Worker-Allowed':'/'})
+
+@app.after_request
+def private_data_cache(response):
+    if request.path=='/' or request.path.startswith('/api/'):
+        response.headers['Cache-Control']='private, no-store'
+    return response
 
 @app.get('/health')
 def health():return {'ok':True}
