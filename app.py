@@ -30,6 +30,8 @@ def init_db():
         c.execute('ALTER TABLE watches ADD COLUMN IF NOT EXISTS price_changed_at TIMESTAMPTZ')
         c.execute('''CREATE TABLE IF NOT EXISTS removal_events(id BIGSERIAL PRIMARY KEY,site TEXT NOT NULL,url TEXT NOT NULL,title TEXT,brand TEXT,model TEXT,year TEXT,condition TEXT,price BIGINT,image_url TEXT,last_seen TIMESTAMPTZ,detected_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
         c.execute('CREATE INDEX IF NOT EXISTS ix_removal_events_detected ON removal_events(detected_at DESC,site)')
+        c.execute("""CREATE TABLE IF NOT EXISTS listing_events(id BIGSERIAL PRIMARY KEY,site TEXT NOT NULL,url TEXT NOT NULL,event_type TEXT NOT NULL,title TEXT,brand TEXT,model TEXT,year TEXT,condition TEXT,price BIGINT,image_url TEXT,detected_at TIMESTAMPTZ NOT NULL DEFAULT now(),snapshot_source TEXT NOT NULL DEFAULT 'observed')""")
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_listing_first_seen ON listing_events(site,url) WHERE event_type IN ('initial','listed')")
 
 def auth_ok():
     secret=os.environ.get('ADMIN_PASSWORD','')
@@ -230,6 +232,20 @@ def removal_window(raw=None):
     start=datetime.combine(day,datetime.min.time(),tzinfo=taipei)
     return day.isoformat(),start,start+timedelta(days=1)
 
+def listing_event_kind(old,baseline_run):
+    if old is None:return 'initial' if baseline_run else 'listed'
+    if old[1]=='possibly_removed':return 'returned'
+    return None
+
+def month_window(raw=None):
+    taipei=ZoneInfo('Asia/Taipei')
+    value=raw if raw is not None else datetime.now(taipei).strftime('%Y-%m')
+    if not re.fullmatch(r'\d{4}-\d{2}',value):raise ValueError('Invalid month')
+    year,month=map(int,value.split('-'))
+    start=datetime(year,month,1,tzinfo=taipei)
+    end=datetime(year+1,1,1,tzinfo=taipei) if month==12 else datetime(year,month+1,1,tzinfo=taipei)
+    return value,start,end
+
 def _crawl():
     init_db()
     with connect() as c:
@@ -240,6 +256,7 @@ def _crawl():
     with requests.Session() as session:
         session.headers.update({'User-Agent':'WatchPriceMonitor/1.0 (public product listings; contact site owner for removal)'})
         for site,root in SITES.items():
+            with connect() as c:baseline_run=not c.execute('SELECT EXISTS(SELECT 1 FROM watches WHERE site=%s AND source_order IS NOT NULL)',(site,)).fetchone()[0]
             queue=[root];visited=set();seen={};site_errors=[]
             maxpages=max(1,min(int(os.getenv('MAX_PAGES_PER_SITE','200')),200))
             while queue and len(visited)<maxpages:
@@ -252,17 +269,20 @@ def _crawl():
                 now=datetime.now(timezone.utc)
                 with connect() as c:
                     previous={r[0]:r[1:] for r in c.execute('SELECT url,price,status,title,model,year,condition FROM watches WHERE site=%s AND url=ANY(%s)',(site,[x['url'] for x in rows])).fetchall()}
-                    writes=[];price_changes=[]
+                    writes=[];price_changes=[];listing_changes=[]
                     for x in rows:
                         if x['url'] in seen:continue
                         seen[x['url']]=len(seen)+1
                         old=previous.get(x['url'])
                         change=change_of(old,x)
+                        kind=listing_event_kind(old,baseline_run)
+                        if kind:listing_changes.append((site,x['url'],kind,x['title'],x['brand'],x['model'],x['year'],x['condition'],x['price'],x['image_url'],now))
                         writes.append((x['site'],x['url'],x['title'],x['brand'],x['model'],x['year'],x['condition'],x['price'],x['price_text'],now,now,change,x['image_url']))
                         if x['price'] is not None and (old is None or old[0]!=x['price']):price_changes.append((site,x['url'],x['price'],now))
                     with c.cursor() as cur:
                         cur.executemany('''INSERT INTO watches(site,url,title,brand,model,year,condition,price,price_text,updated,last_seen,status,image_url,missing_runs) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0) ON CONFLICT(site,url) DO UPDATE SET title=EXCLUDED.title,brand=EXCLUDED.brand,model=EXCLUDED.model,year=EXCLUDED.year,condition=EXCLUDED.condition,price_changed_at=CASE WHEN watches.price IS NOT NULL AND EXCLUDED.price IS NOT NULL AND watches.price<>EXCLUDED.price THEN EXCLUDED.updated ELSE watches.price_changed_at END,price=EXCLUDED.price,price_text=EXCLUDED.price_text,updated=EXCLUDED.updated,last_seen=EXCLUDED.last_seen,status=EXCLUDED.status,image_url=COALESCE(NULLIF(EXCLUDED.image_url,''),watches.image_url),missing_runs=0''',writes)
                         cur.executemany('INSERT INTO history(site,url,price,checked) VALUES(%s,%s,%s,%s)',price_changes)
+                        cur.executemany('INSERT INTO listing_events(site,url,event_type,title,brand,model,year,condition,price,image_url,detected_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING',listing_changes)
                 for a in soup.find_all('a',href=True):
                     if re.fullmatch(r'\d{1,3}',a.get_text(' ',strip=True)):
                         nxt=urllib.parse.urljoin(url,a['href']).split('#')[0]
@@ -340,6 +360,27 @@ def removals():
         row=dict(zip(fields,[v.isoformat() if isinstance(v,datetime) else v for v in record]))
         groups.setdefault(row['site'],[]).append(row)
     return jsonify({'date':day,'timezone':'Asia/Taipei','count':len(records),'groups':[{'site':site,'count':len(items),'items':items} for site,items in groups.items()]})
+
+@app.get('/api/monthly-events')
+@protected
+def monthly_events():
+    try:month,start,end=month_window(request.args.get('month'))
+    except ValueError:return jsonify({'error':'月份格式須為 YYYY-MM'}),400
+    with connect() as c:
+        records=c.execute("""SELECT e.site,e.url,e.event_type,e.title,e.brand,e.model,e.year,e.condition,e.price,e.image_url,e.detected_at,e.snapshot_source
+            FROM listing_events e WHERE e.detected_at >= %s AND e.detected_at < %s
+            UNION ALL
+            SELECT e.site,e.url,'removed',e.title,e.brand,e.model,e.year,e.condition,e.price,e.image_url,e.detected_at,'observed'
+            FROM removal_events e WHERE e.detected_at >= %s AND e.detected_at < %s
+            ORDER BY 11 DESC,1,2""",(start,end,start,end)).fetchall()
+    fields=['site','url','event_type','title','brand','model','year','condition','price','image_url','detected_at','snapshot_source']
+    groups={site:[] for site in SITES}
+    for record in records:
+        item=dict(zip(fields,[v.isoformat() if isinstance(v,datetime) else v for v in record]))
+        groups.setdefault(item['site'],[]).append(item)
+    return jsonify({'month':month,'timezone':'Asia/Taipei','count':len(records),'groups':[
+        {'site':site,'counts':{kind:sum(x['event_type']==kind for x in items) for kind in ['listed','removed','returned','initial']},'items':items}
+        for site,items in groups.items()]})
 
 @app.get('/api/history')
 @protected
