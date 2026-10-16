@@ -111,13 +111,18 @@ def _crawl():
                     site_errors.append(f'{url}: {str(e)[:120]}');continue
                 now=datetime.now(timezone.utc)
                 with connect() as c:
+                    previous={r[0]:r[1:] for r in c.execute('SELECT url,price,status,title,model,year,condition FROM watches WHERE site=%s AND url=ANY(%s)',(site,[x['url'] for x in rows])).fetchall()}
+                    writes=[];price_changes=[]
                     for x in rows:
                         if x['url'] in seen:continue
                         seen.add(x['url'])
-                        old=c.execute('SELECT price,status,title,model,year,condition FROM watches WHERE site=%s AND url=%s',(site,x['url'])).fetchone()
+                        old=previous.get(x['url'])
                         change=change_of(old,x)
-                        c.execute('''INSERT INTO watches(site,url,title,brand,model,year,condition,price,price_text,updated,last_seen,status,missing_runs) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0) ON CONFLICT(site,url) DO UPDATE SET title=EXCLUDED.title,brand=EXCLUDED.brand,model=EXCLUDED.model,year=EXCLUDED.year,condition=EXCLUDED.condition,price=EXCLUDED.price,price_text=EXCLUDED.price_text,updated=EXCLUDED.updated,last_seen=EXCLUDED.last_seen,status=EXCLUDED.status,missing_runs=0''',(x['site'],x['url'],x['title'],x['brand'],x['model'],x['year'],x['condition'],x['price'],x['price_text'],now,now,change))
-                        if x['price'] is not None and (old is None or old[0]!=x['price']):c.execute('INSERT INTO history(site,url,price,checked) VALUES(%s,%s,%s,%s)',(site,x['url'],x['price'],now))
+                        writes.append((x['site'],x['url'],x['title'],x['brand'],x['model'],x['year'],x['condition'],x['price'],x['price_text'],now,now,change))
+                        if x['price'] is not None and (old is None or old[0]!=x['price']):price_changes.append((site,x['url'],x['price'],now))
+                    with c.cursor() as cur:
+                        cur.executemany('''INSERT INTO watches(site,url,title,brand,model,year,condition,price,price_text,updated,last_seen,status,missing_runs) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0) ON CONFLICT(site,url) DO UPDATE SET title=EXCLUDED.title,brand=EXCLUDED.brand,model=EXCLUDED.model,year=EXCLUDED.year,condition=EXCLUDED.condition,price=EXCLUDED.price,price_text=EXCLUDED.price_text,updated=EXCLUDED.updated,last_seen=EXCLUDED.last_seen,status=EXCLUDED.status,missing_runs=0''',writes)
+                        cur.executemany('INSERT INTO history(site,url,price,checked) VALUES(%s,%s,%s,%s)',price_changes)
                 for a in soup.find_all('a',href=True):
                     if re.fullmatch(r'\d{1,3}',a.get_text(' ',strip=True)):
                         nxt=urllib.parse.urljoin(url,a['href']).split('#')[0]
