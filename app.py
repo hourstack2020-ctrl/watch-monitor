@@ -6,6 +6,7 @@ from flask import Flask, request, jsonify, Response, send_file
 import requests, psycopg
 import base64
 from pwa_assets import ICONS, SERVICE_WORKER
+import push_notifications as push
 from bs4 import BeautifulSoup
 
 app=Flask(__name__)
@@ -306,6 +307,10 @@ def _crawl():
     with connect() as c:
         c.execute('UPDATE crawl_runs SET finished=now(),status=%s,count=%s,errors=%s WHERE id=%s',('partial' if errors else 'completed',total,'; '.join(errors),runid))
     if errors:raise RuntimeError('Crawl incomplete: '+'; '.join(errors))
+    try:
+        result=push.notify_low_prices(connect,lower_price_items)
+        logging.info('Low-price notifications: %d sent, %d failed',result['sent'],result['failed'])
+    except Exception:logging.warning('Low-price notification check failed; will retry after next complete crawl')
     return total
 
 @app.get('/manifest.webmanifest')
@@ -405,6 +410,43 @@ def monthly_events():
     return jsonify({'month':month,'timezone':'Asia/Taipei','count':len(records),'groups':[
         {'site':site,'counts':{kind:sum(x['event_type']==kind for x in items) for kind in ['listed','removed','returned','initial']},'items':items}
         for site,items in groups.items()]})
+
+@app.get('/api/push/config')
+@protected
+def push_config():return jsonify({'enabled':push.configured(),'publicKey':os.getenv('VAPID_PUBLIC_KEY','')})
+
+@app.post('/api/push/subscribe')
+@protected
+def push_subscribe():
+    if request.headers.get('X-Watch-Monitor')!='1':return jsonify({'error':'Missing request header'}),403
+    if not push.configured():return jsonify({'error':'通知服務尚未就緒'}),503
+    try:subscription=push.validate_subscription(request.get_json(silent=True))
+    except (ValueError,TypeError):return jsonify({'error':'無效的手機推播訂閱資料'}),400
+    sid=push.subscription_id(subscription['endpoint'])
+    with connect() as c:c.execute('INSERT INTO push_subscriptions(id,subscription) VALUES(%s,%s::jsonb) ON CONFLICT(id) DO UPDATE SET subscription=EXCLUDED.subscription,updated_at=now()',(sid,json.dumps(subscription)))
+    return jsonify({'ok':True})
+
+@app.post('/api/push/unsubscribe')
+@protected
+def push_unsubscribe():
+    if request.headers.get('X-Watch-Monitor')!='1':return jsonify({'error':'Missing request header'}),403
+    body=request.get_json(silent=True) or {};endpoint=body.get('endpoint') if isinstance(body,dict) else None
+    if not isinstance(endpoint,str) or len(endpoint)>4096:return jsonify({'error':'無效資料'}),400
+    with connect() as c:c.execute('DELETE FROM push_subscriptions WHERE id=%s',(push.subscription_id(endpoint),))
+    return jsonify({'ok':True})
+
+@app.post('/api/push/test')
+@protected
+def push_test():
+    if request.headers.get('X-Watch-Monitor')!='1':return jsonify({'error':'Missing request header'}),403
+    if not push.configured():return jsonify({'error':'通知服務尚未就緒'}),503
+    body=request.get_json(silent=True) or {};endpoint=body.get('endpoint') if isinstance(body,dict) else None
+    if not isinstance(endpoint,str) or len(endpoint)>4096:return jsonify({'error':'無效資料'}),400
+    with connect() as c:record=c.execute('SELECT subscription FROM push_subscriptions WHERE id=%s',(push.subscription_id(endpoint),)).fetchone()
+    if not record:return jsonify({'error':'請先啟用此裝置通知'}),404
+    try:push.send(record[0],{'title':'鐘點站通知測試成功','body':'低價通知已啟用；完整爬取後發現符合條件商品時會通知。','url':'/#comparisonSection','tag':'notification-test'})
+    except Exception:return jsonify({'error':'測試通知送出失敗，請重新啟用通知後再試'}),502
+    return jsonify({'ok':True})
 
 @app.get('/api/history')
 @protected
