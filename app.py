@@ -1,5 +1,6 @@
 import os, re, json, time, hmac, hashlib, logging, urllib.parse, subprocess, sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date, timedelta
+from zoneinfo import ZoneInfo
 from functools import wraps
 from flask import Flask, request, jsonify, Response, send_file
 import requests, psycopg
@@ -25,6 +26,8 @@ def init_db():
         c.execute('CREATE INDEX IF NOT EXISTS ix_watch_model ON watches(model)')
         c.execute('CREATE INDEX IF NOT EXISTS ix_history_url ON history(site,url,checked DESC)')
         c.execute('ALTER TABLE watches ADD COLUMN IF NOT EXISTS image_url TEXT')
+        c.execute('''CREATE TABLE IF NOT EXISTS removal_events(id BIGSERIAL PRIMARY KEY,site TEXT NOT NULL,url TEXT NOT NULL,title TEXT,brand TEXT,model TEXT,year TEXT,condition TEXT,price BIGINT,image_url TEXT,last_seen TIMESTAMPTZ,detected_at TIMESTAMPTZ NOT NULL DEFAULT now())''')
+        c.execute('CREATE INDEX IF NOT EXISTS ix_removal_events_detected ON removal_events(detected_at DESC,site)')
 
 def auth_ok():
     secret=os.environ.get('ADMIN_PASSWORD','')
@@ -211,6 +214,20 @@ def crawl():
             raise
         finally:lock.execute('SELECT pg_advisory_unlock(68234016)')
 
+def record_missing(c,site,run_started):
+    # Persist a snapshot on the second complete miss, in the same transaction
+    # as the status update. Further misses do not create duplicate events.
+    c.execute("""INSERT INTO removal_events(site,url,title,brand,model,year,condition,price,image_url,last_seen)
+        SELECT site,url,title,brand,model,year,condition,price,image_url,last_seen
+        FROM watches WHERE site=%s AND last_seen < %s AND missing_runs=1""",(site,run_started))
+    c.execute("UPDATE watches SET missing_runs=missing_runs+1,status=CASE WHEN missing_runs+1>=2 THEN 'possibly_removed' ELSE status END WHERE site=%s AND last_seen < %s",(site,run_started))
+
+def removal_window(raw=None):
+    taipei=ZoneInfo('Asia/Taipei')
+    day=date.fromisoformat(raw) if raw else datetime.now(taipei).date()
+    start=datetime.combine(day,datetime.min.time(),tzinfo=taipei)
+    return day.isoformat(),start,start+timedelta(days=1)
+
 def _crawl():
     init_db()
     with connect() as c:
@@ -257,7 +274,7 @@ def _crawl():
             if site_errors:errors.extend(f'{site}: {e}' for e in site_errors[:3])
             if not site_errors and not queue and seen:
                 with connect() as c:
-                    c.execute("UPDATE watches SET missing_runs=missing_runs+1,status=CASE WHEN missing_runs+1>=2 THEN 'possibly_removed' ELSE status END WHERE site=%s AND last_seen < %s",(site,run_started))
+                    record_missing(c,site,run_started)
     with connect() as c:
         c.execute('UPDATE crawl_runs SET finished=now(),status=%s,count=%s,errors=%s WHERE id=%s',('partial' if errors else 'completed',total,'; '.join(errors),runid))
     if errors:raise RuntimeError('Crawl incomplete: '+'; '.join(errors))
@@ -300,6 +317,24 @@ def comparisons():
     fields=['site','url','title','brand','model','year','condition','price','image_url','updated','status','missing_runs']
     rows=[dict(zip(fields,[v.isoformat() if isinstance(v,datetime) else v for v in r])) for r in records]
     return jsonify(lower_price_items(rows))
+
+@app.get('/api/removals')
+@protected
+def removals():
+    try:day,start,end=removal_window(request.args.get('date'))
+    except ValueError:return jsonify({'error':'日期格式須為 YYYY-MM-DD'}),400
+    with connect() as c:
+        records=c.execute("""SELECT e.site,e.url,e.title,e.brand,e.model,e.year,e.condition,e.price,e.image_url,e.last_seen,e.detected_at,
+            COALESCE(w.missing_runs=0,false) AS returned
+            FROM removal_events e LEFT JOIN watches w ON w.site=e.site AND w.url=e.url
+            WHERE e.detected_at >= %s AND e.detected_at < %s
+            ORDER BY e.detected_at DESC,e.id DESC""",(start,end)).fetchall()
+    fields=['site','url','title','brand','model','year','condition','price','image_url','last_seen','detected_at','returned']
+    groups={site:[] for site in SITES}
+    for record in records:
+        row=dict(zip(fields,[v.isoformat() if isinstance(v,datetime) else v for v in record]))
+        groups.setdefault(row['site'],[]).append(row)
+    return jsonify({'date':day,'timezone':'Asia/Taipei','count':len(records),'groups':[{'site':site,'count':len(items),'items':items} for site,items in groups.items()]})
 
 @app.get('/api/history')
 @protected
