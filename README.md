@@ -87,3 +87,9 @@
 - Render Web 與 Cron 都需 VAPID_PUBLIC_KEY、VAPID_PRIVATE_KEY、VAPID_SUBJECT；私鑰僅存在環境設定，不可提交 Git。
 - /api/push/config 需認證；POST /api/push/subscribe、unsubscribe、test 需認證及 X-Watch-Monitor: 1。僅允許已知 Apple/Google/Mozilla HTTPS 推播端點。
 - 已驗證訂閱、去重邏輯、權限與 API；實體 iPhone 是否收到通知需使用者授權後按「測試通知」確認。
+
+## iPhone App 內登入
+- 首頁未登入時顯示手機適配的帳密表單，不依賴 iOS 主畫面 App 的 HTTP Basic 登入提示。
+- /api/login 驗證原有 HS 帳號與 ADMIN_PASSWORD，建立 30 天簽章工作階段；Secure、HttpOnly、SameSite=Lax cookie，換密碼即失效。
+- SESSION_SECRET 為 Render Web 專用的隨機簽章密鑰，不可提交 Git。原有 Basic 認證保留供維運 API 使用。
+- 未登入 API 回傳 401 JSON，不再觸發系統 Basic 對話框。商品資料與登入頁均不快取。
