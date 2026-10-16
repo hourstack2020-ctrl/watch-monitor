@@ -71,3 +71,10 @@
 - 每輪無新變更時保留既有新上架、漲價、降價、資料變更或重新上架標記，不重設為無變動。
 - 真正再次變價、資料修改或重新上架時，改顯示最近一次實際變更；疑似下架仍按原規則判定。
 - 價格歷史保留所有已記錄的價格；舊版已覆蓋成無變動的漲跌標記，可依最近一次數字價格變化恢復。無可靠歷史者不猜測。
+
+## iPhone 主畫面網頁 App
+- Safari 開啟正式網站並登入 → 分享 → 加入主畫面 → 打開為網頁 App（如有顯示）→ 加入。
+- 加入 HS 圖示、manifest standalone、apple-touch-icon、iPhone 安全邊界與安裝引導；沿用網站帳密和雲端資料。非 App Store 原生 App。
+- /manifest.webmanifest、/app-icon-180.png、/app-icon-192.png、/app-icon-512.png、/service-worker.js 僅含公開安裝資產。
+- Service Worker 只快取公開圖示；HTML 和 API 不快取，驗證頁及 API 回應設定 private, no-store。離線顯示重新連線提示，不提供離線庫存。
+- 首次由主畫面開啟可能需要重新登入。尚未透過實體 iPhone 驗證安裝流程；伺服器與安裝資產、登入保護及離線邏輯已驗證。
