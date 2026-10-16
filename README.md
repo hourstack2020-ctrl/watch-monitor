@@ -78,3 +78,12 @@
 - /manifest.webmanifest、/app-icon-180.png、/app-icon-192.png、/app-icon-512.png、/service-worker.js 僅含公開安裝資產。
 - Service Worker 只快取公開圖示；HTML 和 API 不快取，驗證頁及 API 回應設定 private, no-store。離線顯示重新連線提示，不提供離線庫存。
 - 首次由主畫面開啟可能需要重新登入。尚未透過實體 iPhone 驗證安裝流程；伺服器與安裝資產、登入保護及離線邏輯已驗證。
+
+## 手機低價推播通知
+- 由 iPhone 主畫面 App 點「啟用低價通知」並允許；可測試或關閉此裝置通知。瀏覽器與手機系統權限須由使用者親自操作。
+- 完整成功爬取四站後，依同型號、面盤顏色、保卡年份、錶帶規則檢查。首次符合、離開清單後再次符合、或同商品再次降價才通知；新舊程度不限制。
+- 每支訂閱裝置獨立去重；多筆符合時合併為一則通知，附部分商品與價差，點擊進入比價清單。無法保證店家改價當下即時通知。
+- push_subscriptions、push_alert_state 啟用 RLS、禁止 anon/authenticated，僅後端專用角色存取。過期 404/410 訂閱自動清理。
+- Render Web 與 Cron 都需 VAPID_PUBLIC_KEY、VAPID_PRIVATE_KEY、VAPID_SUBJECT；私鑰僅存在環境設定，不可提交 Git。
+- /api/push/config 需認證；POST /api/push/subscribe、unsubscribe、test 需認證及 X-Watch-Monitor: 1。僅允許已知 Apple/Google/Mozilla HTTPS 推播端點。
+- 已驗證訂閱、去重邏輯、權限與 API；實體 iPhone 是否收到通知需使用者授權後按「測試通知」確認。
