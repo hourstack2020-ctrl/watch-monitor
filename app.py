@@ -71,13 +71,40 @@ def model_of(t):
         if not re.fullmatch(r'20\d{2}|\d{2,3}MM|\d{1,3}',s):return s
     return ''
 
+def dial_color_of(title):
+    # Only explicit dial descriptions; never infer from bezel, strap or nickname.
+    colors=r'煙燻綠|煙燻藍|煙燻灰|天藍|蒂芙尼藍|TIFFANY藍|冰藍|淺藍|深藍|亮藍|海軍藍|午夜藍|薄荷綠|橄欖綠|墨綠|深綠|淺綠|綠松石|香檳金|香檳|玫瑰金|巧克力|咖啡|棕|褐|黑|白|銀|金|灰|藍|綠|紅|粉紅|粉|紫|黃|橘|橙'
+    pattern=r'('+colors+r')(?:色)?(?:太陽放射紋|太陽紋|放射紋|波紋|條紋|巴黎釘紋|旭日紋|格紋|鏤空|漆|珍珠母貝|貝殼)?(?:面盤|錶盤|錶面|面)(?!盤?時標|框|圈)'
+    found={m.group(1) for m in re.finditer(pattern,title)}
+    # Distinct special dials must not collapse into a plain base color.
+    if re.search(r'熊貓|漸層|漸藍|雙色|多色|彩色|滿天星|袖扣|項鍊|錶盒',title):return ''
+    if re.search(r'漸變(?!煙燻)',title):return ''
+    if len(found)!=1:return ''
+    color=found.pop()
+    return {'粉':'粉紅','香檳':'香檳金','褐':'棕','橙':'橘'}.get(color,color)
+
+def condition_grade(value):
+    value=re.sub(r'\s+','',value or '')
+    if re.fullmatch(r'(?:全新)?未使用(?:品)?',value):return '未使用'
+    m=re.match(r'(\d)成(\d{1,2})(?:新|成)',value)
+    if m:return m[1]+'.'+m[2]+'成新'
+    m=re.match(r'(\d\.\d{1,2})成新',value)
+    return m[1]+'成新' if m else ''
+
+def comparison_attributes(item):
+    title=item.get('title') or ''
+    years=set(re.findall(r'(20\d{2})年(?:新式|木紋|電子|新式木紋)*(?:保卡|保單|保證書)',title))
+    return (dial_color_of(title),next(iter(years)) if len(years)==1 else '',condition_grade(item.get('condition')))
+
 def comparison_key(item):
     brand=brand_of(item['title'])
     reference=model_of(item['title'])
     if not reference or brand=='其他':return None
     normalized=re.sub(r'[^A-Z0-9]','',reference.upper())
     if brand=='Panerai':normalized='PAM'+str(int(normalized[3:]))
-    return brand,normalized
+    attributes=comparison_attributes(item)
+    if not all(attributes):return None
+    return (brand,normalized)+attributes
 
 def lower_price_items(rows):
     baseline={};active=[]
@@ -93,7 +120,7 @@ def lower_price_items(rows):
         own=baseline.get(key)
         if own and row['price']<own['price']:
             difference=own['price']-row['price']
-            matches.append({'brand':key[0],'model':model_of(row['title']),'competitor':row,'baseline':own,'difference':difference,'difference_percent':round(100*difference/own['price'],1)})
+            matches.append({'brand':key[0],'model':model_of(row['title']),'dial_color':key[2],'year':key[3],'condition_grade':key[4],'competitor':row,'baseline':own,'difference':difference,'difference_percent':round(100*difference/own['price'],1)})
     return {'baseline_models':len(baseline),'items':sorted(matches,key=lambda x:(-x['difference'],-x['difference_percent'],x['competitor']['url']))}
 
 def change_of(old,item):
