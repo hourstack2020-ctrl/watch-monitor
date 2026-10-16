@@ -19,7 +19,7 @@
 - Supabase：watch-monitor（Tokyo）。watches、history、crawl_runs 三張資料表均啟用 RLS；anon/authenticated 不可存取。
 - 後端專用 watch_monitor_app 角色僅可讀寫監控資料，不使用資料庫管理員帳號。
 - 排程設定：UTC 00:00、12:00，即台灣 08:00、20:00。
-- Render Cron 名稱：hourstack-watch-crawler；建立需帳戶已設定付款方式，每月最低 US$1。尚未建立前不會自動爬取。
+- Render Cron：hourstack-watch-crawler 已啟用（Singapore、Starter），台灣時間每天 08:00、20:00 執行；每月最低 US$1。
 
 ## 環境變數（僅設定於 Render，勿提交秘密）
 - DATABASE_URL：Supabase Session Pooler URI，專用角色，SSL 必須啟用。
