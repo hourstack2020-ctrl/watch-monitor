@@ -1,4 +1,4 @@
-import os, re, json, time, hmac, hashlib, logging, urllib.parse
+import os, re, json, time, hmac, hashlib, logging, urllib.parse, subprocess, sys
 from datetime import datetime, timezone
 from functools import wraps
 from flask import Flask, request, jsonify, Response, send_file
@@ -12,9 +12,10 @@ BRANDS={'ROLEX':'Rolex','PATEK PHILIPPE':'Patek Philippe','AUDEMARS PIGUET':'Aud
 MODEL=re.compile(r'(?<![A-Za-z0-9])(?:[A-Z]{0,5}\d{3,8}[A-Z]{0,5}(?:[./-][A-Z0-9]{1,12}){0,4}|\d{2,6}[./-][A-Z0-9]{2,10}(?:[./-][A-Z0-9]{2,12}){0,3})(?![A-Za-z0-9])',re.I)
 
 def connect():
-    return psycopg.connect(os.environ['DATABASE_URL'],autocommit=False)
+    return psycopg.connect(os.environ['DATABASE_URL'],autocommit=False,connect_timeout=15,prepare_threshold=None)
 
 def init_db():
+    if os.environ.get('SKIP_DB_INIT') == '1':return
     with connect() as c:
         c.execute('''CREATE TABLE IF NOT EXISTS watches(site TEXT NOT NULL,url TEXT NOT NULL,title TEXT,brand TEXT,model TEXT,year TEXT,condition TEXT,price BIGINT,price_text TEXT,updated TIMESTAMPTZ,last_seen TIMESTAMPTZ,status TEXT DEFAULT 'new',first_seen TIMESTAMPTZ DEFAULT now(),missing_runs INTEGER DEFAULT 0,PRIMARY KEY(site,url))''')
         c.execute('''CREATE TABLE IF NOT EXISTS history(id BIGSERIAL PRIMARY KEY,site TEXT,url TEXT,price BIGINT,checked TIMESTAMPTZ DEFAULT now())''')
@@ -69,6 +70,13 @@ def extract(site,url,session):
     return list(results.values()),soup
 
 def crawl():
+    with connect() as lock:
+        if not lock.execute('SELECT pg_try_advisory_lock(68234016)').fetchone()[0]:
+            raise RuntimeError('Another crawl is already running')
+        try:return _crawl()
+        finally:lock.execute('SELECT pg_advisory_unlock(68234016)')
+
+def _crawl():
     init_db()
     with connect() as c:
         runid=c.execute('INSERT INTO crawl_runs DEFAULT VALUES RETURNING id').fetchone()[0]
@@ -78,7 +86,7 @@ def crawl():
         session.headers.update({'User-Agent':'WatchPriceMonitor/1.0 (public product listings; contact site owner for removal)'})
         for site,root in SITES.items():
             queue=[root];visited=set();seen=set();site_errors=[]
-            maxpages=max(1,min(int(os.getenv('MAX_PAGES_PER_SITE','30')),200))
+            maxpages=max(1,min(int(os.getenv('MAX_PAGES_PER_SITE','200')),200))
             while queue and len(visited)<maxpages:
                 url=queue.pop(0)
                 if url in visited:continue
@@ -89,28 +97,42 @@ def crawl():
                 now=datetime.now(timezone.utc)
                 with connect() as c:
                     for x in rows:
+                        if x['url'] in seen:continue
                         seen.add(x['url'])
                         old=c.execute('SELECT price FROM watches WHERE site=%s AND url=%s',(site,x['url'])).fetchone()
                         change='new' if old is None else ('price_down' if x['price'] is not None and old[0] is not None and x['price']<old[0] else 'price_up' if x['price'] is not None and old[0] is not None and x['price']>old[0] else 'unchanged')
                         c.execute('''INSERT INTO watches(site,url,title,brand,model,year,condition,price,price_text,updated,last_seen,status,missing_runs) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0) ON CONFLICT(site,url) DO UPDATE SET title=EXCLUDED.title,brand=EXCLUDED.brand,model=EXCLUDED.model,year=EXCLUDED.year,condition=EXCLUDED.condition,price=EXCLUDED.price,price_text=EXCLUDED.price_text,updated=EXCLUDED.updated,last_seen=EXCLUDED.last_seen,status=EXCLUDED.status,missing_runs=0''',(x['site'],x['url'],x['title'],x['brand'],x['model'],x['year'],x['condition'],x['price'],x['price_text'],now,now,change))
                         if x['price'] is not None and (old is None or old[0]!=x['price']):c.execute('INSERT INTO history(site,url,price,checked) VALUES(%s,%s,%s,%s)',(site,x['url'],x['price'],now))
-                total+=len(rows)
                 for a in soup.find_all('a',href=True):
                     if re.fullmatch(r'\d{1,3}',a.get_text(' ',strip=True)):
                         nxt=urllib.parse.urljoin(url,a['href']).split('#')[0]
                         if urllib.parse.urlparse(nxt).netloc==urllib.parse.urlparse(root).netloc and nxt not in visited and nxt not in queue:queue.append(nxt)
                 time.sleep(float(os.getenv('CRAWL_DELAY_SECONDS','2')))
             # Avoid false delisting when pagination is incomplete or site blocks scraping.
+            total+=len(seen)
+            logging.info('%s: %d unique products, %d pages, %d queued',site,len(seen),len(visited),len(queue))
+            if not seen:site_errors.append('No products found; check site parser or access restrictions')
+            if queue:site_errors.append('Page limit reached; inventory coverage is incomplete')
             if site_errors:errors.extend(f'{site}: {e}' for e in site_errors[:3])
             if not site_errors and not queue and seen:
                 with connect() as c:
                     c.execute("UPDATE watches SET missing_runs=missing_runs+1,status=CASE WHEN missing_runs+1>=2 THEN 'possibly_removed' ELSE status END WHERE site=%s AND last_seen < %s",(site,run_started))
     with connect() as c:
         c.execute('UPDATE crawl_runs SET finished=now(),status=%s,count=%s,errors=%s WHERE id=%s',('partial' if errors else 'completed',total,'; '.join(errors),runid))
+    if errors:raise RuntimeError('Crawl incomplete: '+'; '.join(errors))
     return total
 
 @app.get('/health')
 def health():return {'ok':True}
+
+@app.get('/ready')
+def ready():
+    try:
+        with connect() as c:c.execute('SELECT 1 FROM watches LIMIT 1')
+        return {'ok':True,'database':'connected'}
+    except Exception:
+        app.logger.exception('Database readiness failed')
+        return {'ok':False,'database':'unavailable'},503
 
 @app.get('/')
 @protected
@@ -138,7 +160,13 @@ def history():
 
 @app.post('/api/crawl')
 @protected
-def manual():return jsonify({'error':'線上版由排程服務執行，請在 Render 後台手動觸發 Cron Job'}),409
+def manual():
+    if request.headers.get('X-Watch-Monitor') != '1':return jsonify({'error':'Missing request header'}),403
+    with connect() as c:
+        running=c.execute("SELECT 1 FROM pg_locks WHERE locktype='advisory' AND objid=68234016 AND granted").fetchone()
+    if running:return jsonify({'error':'更新已在執行中'}),409
+    subprocess.Popen([sys.executable,os.path.abspath(__file__),'crawl'],cwd=app.root_path)
+    return jsonify({'started':True}),202
 
 if __name__=='__main__':
     import sys
