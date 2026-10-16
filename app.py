@@ -45,6 +45,16 @@ def model_of(t):
         if not re.fullmatch(r'20\d{2}|\d{2,3}MM',s):return s
     return ''
 
+def change_of(old,item):
+    if old is None:return 'new'
+    before,previous_status,title,model,year,condition=old
+    price=item['price']
+    if before is not None and price is not None and price!=before:
+        return 'price_down' if price<before else 'price_up'
+    if previous_status=='possibly_removed':return 'returned'
+    if (before,title,model,year,condition)!=(price,item['title'],item['model'],item['year'],item['condition']):return 'changed'
+    return 'unchanged'
+
 def extract(site,url,session):
     r=session.get(url,timeout=25);r.raise_for_status();r.encoding=r.apparent_encoding
     soup=BeautifulSoup(r.text,'html.parser')
@@ -74,11 +84,16 @@ def crawl():
         if not lock.execute('SELECT pg_try_advisory_lock(68234016)').fetchone()[0]:
             raise RuntimeError('Another crawl is already running')
         try:return _crawl()
+        except Exception:
+            with connect() as c:
+                c.execute("UPDATE crawl_runs SET finished=now(),status='failed',errors=CASE WHEN errors='' THEN 'Crawler failed; see service logs' ELSE errors END WHERE status='running'")
+            raise
         finally:lock.execute('SELECT pg_advisory_unlock(68234016)')
 
 def _crawl():
     init_db()
     with connect() as c:
+        c.execute("UPDATE crawl_runs SET finished=now(),status='failed',errors='Previous crawler was interrupted' WHERE status='running'")
         runid=c.execute('INSERT INTO crawl_runs DEFAULT VALUES RETURNING id').fetchone()[0]
         run_started=c.execute('SELECT started FROM crawl_runs WHERE id=%s',(runid,)).fetchone()[0]
     total=0;errors=[]
@@ -99,8 +114,8 @@ def _crawl():
                     for x in rows:
                         if x['url'] in seen:continue
                         seen.add(x['url'])
-                        old=c.execute('SELECT price FROM watches WHERE site=%s AND url=%s',(site,x['url'])).fetchone()
-                        change='new' if old is None else ('price_down' if x['price'] is not None and old[0] is not None and x['price']<old[0] else 'price_up' if x['price'] is not None and old[0] is not None and x['price']>old[0] else 'unchanged')
+                        old=c.execute('SELECT price,status,title,model,year,condition FROM watches WHERE site=%s AND url=%s',(site,x['url'])).fetchone()
+                        change=change_of(old,x)
                         c.execute('''INSERT INTO watches(site,url,title,brand,model,year,condition,price,price_text,updated,last_seen,status,missing_runs) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0) ON CONFLICT(site,url) DO UPDATE SET title=EXCLUDED.title,brand=EXCLUDED.brand,model=EXCLUDED.model,year=EXCLUDED.year,condition=EXCLUDED.condition,price=EXCLUDED.price,price_text=EXCLUDED.price_text,updated=EXCLUDED.updated,last_seen=EXCLUDED.last_seen,status=EXCLUDED.status,missing_runs=0''',(x['site'],x['url'],x['title'],x['brand'],x['model'],x['year'],x['condition'],x['price'],x['price_text'],now,now,change))
                         if x['price'] is not None and (old is None or old[0]!=x['price']):c.execute('INSERT INTO history(site,url,price,checked) VALUES(%s,%s,%s,%s)',(site,x['url'],x['price'],now))
                 for a in soup.find_all('a',href=True):
