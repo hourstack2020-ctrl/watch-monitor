@@ -22,6 +22,7 @@ def init_db():
         c.execute('''CREATE TABLE IF NOT EXISTS crawl_runs(id BIGSERIAL PRIMARY KEY,started TIMESTAMPTZ DEFAULT now(),finished TIMESTAMPTZ,status TEXT DEFAULT 'running',count INTEGER DEFAULT 0,errors TEXT DEFAULT '')''')
         c.execute('CREATE INDEX IF NOT EXISTS ix_watch_model ON watches(model)')
         c.execute('CREATE INDEX IF NOT EXISTS ix_history_url ON history(site,url,checked DESC)')
+        c.execute('ALTER TABLE watches ADD COLUMN IF NOT EXISTS image_url TEXT')
 
 def auth_ok():
     secret=os.environ.get('ADMIN_PASSWORD','')
@@ -55,9 +56,30 @@ def change_of(old,item):
     if (before,title,model,year,condition)!=(price,item['title'],item['model'],item['year'],item['condition']):return 'changed'
     return 'unchanged'
 
+def product_images(soup,page_url):
+    images={}
+    def valid(raw):
+        candidate=urllib.parse.urljoin(page_url,raw or '')
+        parsed=urllib.parse.urlparse(candidate)
+        if parsed.scheme not in ('http','https') or parsed.hostname!=urllib.parse.urlparse(page_url).hostname or not parsed.path.lower().startswith('/product/'):return ''
+        return urllib.parse.urlunparse(parsed._replace(scheme='https'))
+    for anchor in soup.find_all('a',href=True):
+        link=urllib.parse.urljoin(page_url,anchor['href']).split('#')[0]
+        photo=next((v for img in anchor.find_all('img') if (v:=valid(img.get('data-src') or img.get('src')))), '')
+        if not photo:
+            parent=anchor
+            for _ in range(6):
+                parent=parent.parent
+                if parent is None:break
+                photo=valid(parent.get('background'))
+                if photo:break
+        if photo and link not in images:images[link]=photo
+    return images
+
 def extract(site,url,session):
     r=session.get(url,timeout=25);r.raise_for_status();r.encoding=r.apparent_encoding
     soup=BeautifulSoup(r.text,'html.parser')
+    images=product_images(soup,url)
     for x in soup(['script','style','noscript']):x.decompose()
     results={}
     for a in soup.find_all('a',href=True):
@@ -76,7 +98,7 @@ def extract(site,url,session):
         price=int(p.group(1).replace(',','')) if p else None
         cond=re.search(r'(?:錶況|品項)\s*[:：]\s*(.{1,28}?)(?=\s+錶徑|\s+編號|\s+售價|$)',context)
         yr=re.search(r'(20\d{2})\s*年\s*(?:木紋|新式)?\s*(?:保卡|保單|保證書)',title) or re.search(r'(20\d{2})\s*年',title)
-        results[link]={'site':site,'url':link,'title':title,'brand':brand_of(title),'model':model_of(title),'year':yr.group(1) if yr else '', 'condition':cond.group(1).strip() if cond else '', 'price':price,'price_text':str(price) if price is not None else '洽詢'}
+        results[link]={'site':site,'url':link,'title':title,'brand':brand_of(title),'model':model_of(title),'year':yr.group(1) if yr else '', 'condition':cond.group(1).strip() if cond else '', 'price':price,'price_text':str(price) if price is not None else '洽詢','image_url':images.get(link,'')}
     return list(results.values()),soup
 
 def crawl():
@@ -118,10 +140,10 @@ def _crawl():
                         seen.add(x['url'])
                         old=previous.get(x['url'])
                         change=change_of(old,x)
-                        writes.append((x['site'],x['url'],x['title'],x['brand'],x['model'],x['year'],x['condition'],x['price'],x['price_text'],now,now,change))
+                        writes.append((x['site'],x['url'],x['title'],x['brand'],x['model'],x['year'],x['condition'],x['price'],x['price_text'],now,now,change,x['image_url']))
                         if x['price'] is not None and (old is None or old[0]!=x['price']):price_changes.append((site,x['url'],x['price'],now))
                     with c.cursor() as cur:
-                        cur.executemany('''INSERT INTO watches(site,url,title,brand,model,year,condition,price,price_text,updated,last_seen,status,missing_runs) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0) ON CONFLICT(site,url) DO UPDATE SET title=EXCLUDED.title,brand=EXCLUDED.brand,model=EXCLUDED.model,year=EXCLUDED.year,condition=EXCLUDED.condition,price=EXCLUDED.price,price_text=EXCLUDED.price_text,updated=EXCLUDED.updated,last_seen=EXCLUDED.last_seen,status=EXCLUDED.status,missing_runs=0''',writes)
+                        cur.executemany('''INSERT INTO watches(site,url,title,brand,model,year,condition,price,price_text,updated,last_seen,status,image_url,missing_runs) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0) ON CONFLICT(site,url) DO UPDATE SET title=EXCLUDED.title,brand=EXCLUDED.brand,model=EXCLUDED.model,year=EXCLUDED.year,condition=EXCLUDED.condition,price=EXCLUDED.price,price_text=EXCLUDED.price_text,updated=EXCLUDED.updated,last_seen=EXCLUDED.last_seen,status=EXCLUDED.status,image_url=COALESCE(NULLIF(EXCLUDED.image_url,''),watches.image_url),missing_runs=0''',writes)
                         cur.executemany('INSERT INTO history(site,url,price,checked) VALUES(%s,%s,%s,%s)',price_changes)
                 for a in soup.find_all('a',href=True):
                     if re.fullmatch(r'\d{1,3}',a.get_text(' ',strip=True)):
@@ -162,8 +184,8 @@ def home():return send_file('index.html')
 @protected
 def watches():
     with connect() as c:
-        rows=c.execute('SELECT site,url,title,brand,model,year,condition,price,price_text,updated,status FROM watches ORDER BY updated DESC LIMIT 20000').fetchall()
-    return jsonify([dict(zip(['site','url','title','brand','model','year','condition','price','price_text','updated','status'],[v.isoformat() if isinstance(v,datetime) else v for v in r])) for r in rows])
+        rows=c.execute('SELECT site,url,title,brand,model,year,condition,price,price_text,updated,status,image_url FROM watches ORDER BY updated DESC LIMIT 20000').fetchall()
+    return jsonify([dict(zip(['site','url','title','brand','model','year','condition','price','price_text','updated','status','image_url'],[v.isoformat() if isinstance(v,datetime) else v for v in r])) for r in rows])
 
 @app.get('/api/status')
 @protected
