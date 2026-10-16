@@ -23,7 +23,7 @@
 
 ## 環境變數（僅設定於 Render，勿提交秘密）
 - DATABASE_URL：Supabase Session Pooler URI，專用角色，SSL 必須啟用。
-- ADMIN_PASSWORD：獨立管理員密碼（登入帳號可用 admin）。
+- ADMIN_PASSWORD：獨立管理員密碼（登入帳號為 HS，區分大小寫）。
 - SKIP_DB_INIT=1：現有資料表已透過 Supabase migration 建立，專用角色不進行建表。
 - MAX_PAGES_PER_SITE=200
 - CRAWL_DELAY_SECONDS=2
