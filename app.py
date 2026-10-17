@@ -231,6 +231,10 @@ def extract(site,url,session):
         if not 22<=len(title)<=550 or not any(k in title.upper() for k in BRANDS):continue
         link=urllib.parse.urljoin(url,a['href']).split('#')[0]
         if urllib.parse.urlparse(link).netloc!=urllib.parse.urlparse(url).netloc:continue
+        if site=='雷達站':
+            product_url=urllib.parse.urlparse(link)
+            product_ids=urllib.parse.parse_qs(product_url.query).get('ID',[])
+            if product_url.path.lower()!='/product_open.asp' or len(product_ids)!=1 or not product_ids[0].isdigit():continue
         node=a;context=''
         for _ in range(5):
             node=node.parent
