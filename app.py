@@ -99,7 +99,32 @@ def dial_color_of(title):
     if re.search(r'漸變(?!煙燻)',title):return ''
     if len(found)!=1:return ''
     color=found.pop()
-    return {'粉':'粉紅','香檳':'香檳金','褐':'棕','橙':'橘'}.get(color,color)
+    color={'粉':'粉紅','香檳':'香檳金','褐':'棕','橙':'橘'}.get(color,color)
+    variants=[]
+    # Main colour alone cannot identify chronograph dial configurations.
+    # Require explicit subdial colour; never infer it from the reference/nickname.
+    chronograph=bool(re.search(r'DAYTONA|迪通拿|計時(?:碼[錶表]|腕[錶表]|功能)|CHRONOGRAPH',title,re.I))
+    subcolors=set(re.findall(r'(黑|白|銀|金|香檳金|香檳|藍|灰|綠|棕)(?:色)?(?:小錶盤|小表盤|小面盤|子錶盤|子盤|計時盤|計時小盤|三眼)',title))
+    subcolors.update(re.findall(r'(?:小錶盤|小表盤|子盤|計時盤)[：:\s]*(黑|白|銀|金|香檳金|香檳|藍|灰|綠|棕)(?:色)?',title))
+    if chronograph and len(subcolors)!=1:return ''
+    if subcolors:
+        if len(subcolors)!=1:return ''
+        variants.append('小錶盤'+subcolors.pop()+'色')
+    for pattern,label in [
+        (r'(?:鑽石|鑲鑽)(?:面盤|錶盤|面)|(?:面盤|錶盤)(?:鑲鑽|鑽石)','鑽面'),
+        (r'(?:珍珠母貝|貝殼)(?:面盤|錶盤|面)','珍珠母貝'),
+        (r'(?:隕石|隕石紋)(?:面盤|錶盤|面)','隕石'),
+        (r'蜂巢(?:圖案|紋)?(?:面盤|錶盤|錶面|面)','蜂巢紋'),
+        (r'(?:橫向雕紋|橫紋|條紋)(?:面盤|錶盤|錶面|面)','條紋'),
+        (r'(?:太陽放射紋|太陽紋|放射紋|旭日紋)(?:面盤|錶盤|錶面|面)','太陽紋'),
+        (r'波紋(?:面盤|錶盤|錶面|面)','波紋'),
+        (r'羅馬(?:數字)?(?:時標|面盤|錶盤|面)','羅馬時標'),
+        (r'(?:鑽石|鑲鑽)(?:時標|刻度)','鑽石時標'),
+        (r'阿拉伯(?:數字)?(?:時標|面盤|錶盤|面)','阿拉伯時標'),
+    ]:
+        if re.search(pattern,title):variants.append(label)
+    return '／'.join([color]+variants)
+
 
 def condition_grade(value):
     value=re.sub(r'\s+','',value or '')
