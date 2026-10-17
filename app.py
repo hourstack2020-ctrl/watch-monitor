@@ -270,7 +270,7 @@ def removal_window(raw=None):
     return day.isoformat(),start,start+timedelta(days=1)
 
 def listing_event_kind(old,baseline_run):
-    if old is None:return 'initial' if baseline_run else 'listed'
+    if old is None:return None if baseline_run else 'listed'
     if old[1]=='possibly_removed':return 'returned'
     return None
 
@@ -445,7 +445,7 @@ def monthly_events():
     except ValueError:return jsonify({'error':'月份格式須為 YYYY-MM'}),400
     with connect() as c:
         records=c.execute("""SELECT e.site,e.url,e.event_type,e.title,e.brand,e.model,e.year,e.condition,e.price,e.image_url,e.detected_at,e.snapshot_source
-            FROM listing_events e WHERE e.detected_at >= %s AND e.detected_at < %s
+            FROM listing_events e WHERE e.event_type IN ('listed','returned') AND e.detected_at >= %s AND e.detected_at < %s
             UNION ALL
             SELECT e.site,e.url,'removed',e.title,e.brand,e.model,e.year,e.condition,e.price,e.image_url,e.detected_at,'observed'
             FROM removal_events e WHERE e.detected_at >= %s AND e.detected_at < %s
@@ -456,7 +456,7 @@ def monthly_events():
         item=dict(zip(fields,[v.isoformat() if isinstance(v,datetime) else v for v in record]))
         groups.setdefault(item['site'],[]).append(item)
     return jsonify({'month':month,'timezone':'Asia/Taipei','count':len(records),'groups':[
-        {'site':site,'counts':{kind:sum(x['event_type']==kind for x in items) for kind in ['listed','removed','returned','initial']},'items':items}
+        {'site':site,'counts':{kind:sum(x['event_type']==kind for x in items) for kind in ['listed','removed','returned']},'items':items}
         for site,items in groups.items()]})
 
 @app.get('/api/clock-daily')
