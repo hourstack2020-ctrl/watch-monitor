@@ -93,3 +93,8 @@
 - /api/login 驗證原有 HS 帳號與 ADMIN_PASSWORD，建立 30 天簽章工作階段；Secure、HttpOnly、SameSite=Lax cookie，換密碼即失效。
 - SESSION_SECRET 為 Render Web 專用的隨機簽章密鑰，不可提交 Git。原有 Basic 認證保留供維運 API 使用。
 - 未登入 API 回傳 401 JSON，不再觸發系統 Basic 對話框。商品資料與登入頁均不快取。
+
+## 鐘點站每日統計
+- 獨立頁籤可查看全部鐘點站商品、按台灣日期的新上架與價格變動；原商品監控列表及 CSV 僅顯示三家同業，鐘點站仍供比價使用。
+- /api/clock-daily?date=YYYY-MM-DD 需管理員認證。新上架依 listing_events 的 listed 事件；首次建檔與重新上架不混計。
+- 價格變動由 history 前後價格計算，排除首次價格；顯示變價商品數、事件數、漲價與降價次數。每日多次變價均保留，日期依偵測時間，商品名稱及圖片依目前資料。
