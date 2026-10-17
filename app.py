@@ -434,7 +434,14 @@ def removals():
         records=c.execute("""SELECT e.site,e.url,e.title,e.brand,e.model,e.year,e.condition,e.price,e.image_url,e.last_seen,e.detected_at,
             COALESCE(w.missing_runs=0,false) AS returned
             FROM removal_events e LEFT JOIN watches w ON w.site=e.site AND w.url=e.url
-            WHERE e.detected_at >= %s AND e.detected_at < %s
+            WHERE e.detected_at >= %s AND e.detected_at < %s AND NOT EXISTS (
+                SELECT 1 FROM listing_events later
+                WHERE later.site=e.site AND later.event_type IN ('listed','returned') AND later.detected_at>e.detected_at
+                AND (later.url=e.url OR (
+                    NULLIF(btrim(e.title),'') IS NOT NULL AND later.title=e.title
+                    AND ROW(later.brand,later.model,later.year,later.condition,later.price,later.image_url)
+                        IS NOT DISTINCT FROM ROW(e.brand,e.model,e.year,e.condition,e.price,e.image_url)
+                )))
             ORDER BY e.detected_at DESC,e.id DESC""",(start,end)).fetchall()
     fields=['site','url','title','brand','model','year','condition','price','image_url','last_seen','detected_at','returned']
     groups={site:[] for site in SITES}
@@ -453,7 +460,14 @@ def monthly_events():
             FROM listing_events e WHERE e.event_type IN ('listed','returned') AND e.detected_at >= %s AND e.detected_at < %s
             UNION ALL
             SELECT e.site,e.url,'removed',e.title,e.brand,e.model,e.year,e.condition,e.price,e.image_url,e.detected_at,'observed'
-            FROM removal_events e WHERE e.detected_at >= %s AND e.detected_at < %s
+            FROM removal_events e WHERE e.detected_at >= %s AND e.detected_at < %s AND NOT EXISTS (
+                SELECT 1 FROM listing_events later
+                WHERE later.site=e.site AND later.event_type IN ('listed','returned') AND later.detected_at>e.detected_at
+                AND (later.url=e.url OR (
+                    NULLIF(btrim(e.title),'') IS NOT NULL AND later.title=e.title
+                    AND ROW(later.brand,later.model,later.year,later.condition,later.price,later.image_url)
+                        IS NOT DISTINCT FROM ROW(e.brand,e.model,e.year,e.condition,e.price,e.image_url)
+                )))
             ORDER BY 11 DESC,1,2""",(start,end,start,end)).fetchall()
     fields=['site','url','event_type','title','brand','model','year','condition','price','image_url','detected_at','snapshot_source']
     groups={site:[] for site in SITES}
