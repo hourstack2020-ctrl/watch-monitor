@@ -192,8 +192,35 @@ def product_images(soup,page_url):
         if photo and link not in images:images[link]=photo
     return images
 
+def fetch_page(session,url):
+    # Retry only idempotent public GETs; never bypass access-denied responses.
+    delays=(3,8,15)
+    for attempt in range(4):
+        response=None
+        try:
+            response=session.get(url,timeout=(10,30),headers={'Connection':'close'} if attempt else {})
+            response.raise_for_status()
+            # Force the entire body to be received before parsing or writing data.
+            response.content
+            return response
+        except requests.RequestException as exc:
+            code=exc.response.status_code if exc.response is not None else None
+            if code is not None and code not in (429,500,502,503,504):raise
+            if attempt==3:raise
+            delay=delays[attempt]
+            if code==429 and exc.response is not None:
+                retry_after=exc.response.headers.get('Retry-After','')
+                if retry_after.isdigit():
+                    # If a server requests a long cooldown, leave it for the next run.
+                    if int(retry_after)>60:raise
+                    delay=max(delay,int(retry_after))
+            logging.warning('Page fetch interrupted (%s); retry %d/3 after %ss: %s',type(exc).__name__,attempt+1,delay,url)
+            if response is not None:response.close()
+            session.close()  # discard a broken pooled connection, keep session headers
+            time.sleep(delay)
+
 def extract(site,url,session):
-    r=session.get(url,timeout=25);r.raise_for_status();r.encoding=r.apparent_encoding
+    r=fetch_page(session,url);r.encoding=r.apparent_encoding
     soup=BeautifulSoup(r.text,'html.parser')
     images=product_images(soup,url)
     for x in soup(['script','style','noscript']):x.decompose()
