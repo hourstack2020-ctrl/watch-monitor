@@ -317,6 +317,10 @@ def _crawl():
         result=push.notify_low_prices(connect,lower_price_items)
         logging.info('Low-price notifications: %d sent, %d failed',result['sent'],result['failed'])
     except Exception:logging.warning('Low-price notification check failed; will retry after next complete crawl')
+    try:
+        result=push.notify_market_events(connect)
+        logging.info('Market-event notifications: %d sent, %d failed',result['sent'],result['failed'])
+    except Exception:logging.exception('Market-event notification check failed; will retry after next complete crawl')
     return total
 
 @app.get('/manifest.webmanifest')
@@ -461,7 +465,9 @@ def push_subscribe():
     try:subscription=push.validate_subscription(request.get_json(silent=True))
     except (ValueError,TypeError):return jsonify({'error':'無效的手機推播訂閱資料'}),400
     sid=push.subscription_id(subscription['endpoint'])
-    with connect() as c:c.execute('INSERT INTO push_subscriptions(id,subscription) VALUES(%s,%s::jsonb) ON CONFLICT(id) DO UPDATE SET subscription=EXCLUDED.subscription,updated_at=now()',(sid,json.dumps(subscription)))
+    with connect() as c:
+        c.execute('INSERT INTO push_subscriptions(id,subscription) VALUES(%s,%s::jsonb) ON CONFLICT(id) DO UPDATE SET subscription=EXCLUDED.subscription,updated_at=now()',(sid,json.dumps(subscription)))
+        push.initialize_event_cursor(c,sid)
     return jsonify({'ok':True})
 
 @app.post('/api/push/unsubscribe')
@@ -482,7 +488,7 @@ def push_test():
     if not isinstance(endpoint,str) or len(endpoint)>4096:return jsonify({'error':'無效資料'}),400
     with connect() as c:record=c.execute('SELECT subscription FROM push_subscriptions WHERE id=%s',(push.subscription_id(endpoint),)).fetchone()
     if not record:return jsonify({'error':'請先啟用此裝置通知'}),404
-    try:push.send(record[0],{'title':'鐘點站通知測試成功','body':'低價通知已啟用；完整爬取後發現符合條件商品時會通知。','url':'/#comparisonSection','tag':'notification-test'})
+    try:push.send(record[0],{'title':'鐘點站通知測試成功','body':'商品通知已啟用；完整爬取後檢查低於鐘點站、同業上架與價格變動。','url':'/#comparisonSection','tag':'notification-test'})
     except Exception:return jsonify({'error':'測試通知送出失敗，請重新啟用通知後再試'}),502
     return jsonify({'ok':True})
 
