@@ -164,7 +164,7 @@ def lower_price_items(rows):
     return {'baseline_models':len(baseline),'items':sorted(matches,key=lambda x:(-x['difference'],-x['difference_percent'],x['competitor']['url']))}
 
 def same_product_items(rows):
-    baseline={};competitors=[]
+    baseline={};competitors=[];grouped={}
     for row in rows:
         if row.get('missing_runs',0)>0 or row.get('status')=='possibly_removed' or not row.get('price') or row['price']<=0:continue
         brand=brand_of(row['title']);model=model_of(row['title']);dial=dial_color_of(row['title'])
@@ -172,6 +172,7 @@ def same_product_items(rows):
         normalized=re.sub(r'[^A-Z0-9]','',model.upper())
         if brand=='Panerai':normalized='PAM'+str(int(normalized[3:]))
         key=(brand,normalized,dial)
+        grouped.setdefault(key,[]).append(dict(row,strap=strap_of(row['title'])))
         if row['site']==BASELINE_SITE:baseline.setdefault(key,[]).append(row)
         else:competitors.append((key,row))
     items=[]
@@ -181,7 +182,19 @@ def same_product_items(rows):
             items.append({'brand':key[0],'model':model_of(row['title']),'dial_color':key[2],
                 'competitor':dict(row,strap=strap_of(row['title'])),'baseline':dict(own,strap=strap_of(own['title'])),
                 'difference':difference,'difference_percent':round(100*difference/own['price'],1)})
-    return {'baseline_models':len(baseline),'items':sorted(items,key=lambda x:(-x['difference'],x['model'],x['competitor']['url'],x['baseline']['url']))}
+    groups=[]
+    for key,listings in grouped.items():
+        sites={x['site'] for x in listings}
+        if len(sites)<2:continue
+        listings=sorted(listings,key=lambda x:(x['price'],x['site'],x['url']))
+        minimum=listings[0]['price'];maximum=listings[-1]['price']
+        groups.append({'brand':key[0],'model':model_of(listings[0]['title']),'dial_color':key[2],
+            'store_count':len(sites),'listing_count':len(listings),'minimum_price':minimum,'maximum_price':maximum,
+            'spread':maximum-minimum,'listings':[dict(x,difference_from_lowest=x['price']-minimum,
+                difference_percent=round(100*(x['price']-minimum)/minimum,1)) for x in listings]})
+    return {'baseline_models':len(baseline),'items':sorted(items,key=lambda x:(-x['difference'],x['model'],x['competitor']['url'],x['baseline']['url'])),
+        'groups':sorted(groups,key=lambda g:(-g['spread'],g['brand'],g['model'],g['dial_color']))}
+
 
 def change_of(old,item):
     if old is None:return 'new'
