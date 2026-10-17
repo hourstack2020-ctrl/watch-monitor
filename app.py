@@ -163,6 +163,26 @@ def lower_price_items(rows):
             matches.append({'brand':key[0],'model':model_of(row['title']),'dial_color':key[2],'year':key[3],'strap':key[4],'competitor':row,'baseline':own,'difference':difference,'difference_percent':round(100*difference/own['price'],1)})
     return {'baseline_models':len(baseline),'items':sorted(matches,key=lambda x:(-x['difference'],-x['difference_percent'],x['competitor']['url']))}
 
+def same_product_items(rows):
+    baseline={};competitors=[]
+    for row in rows:
+        if row.get('missing_runs',0)>0 or row.get('status')=='possibly_removed' or not row.get('price') or row['price']<=0:continue
+        brand=brand_of(row['title']);model=model_of(row['title']);dial=dial_color_of(row['title'])
+        if brand=='其他' or not model or not dial:continue
+        normalized=re.sub(r'[^A-Z0-9]','',model.upper())
+        if brand=='Panerai':normalized='PAM'+str(int(normalized[3:]))
+        key=(brand,normalized,dial)
+        if row['site']==BASELINE_SITE:baseline.setdefault(key,[]).append(row)
+        else:competitors.append((key,row))
+    items=[]
+    for key,row in competitors:
+        for own in baseline.get(key,[]):
+            difference=own['price']-row['price']
+            items.append({'brand':key[0],'model':model_of(row['title']),'dial_color':key[2],
+                'competitor':dict(row,strap=strap_of(row['title'])),'baseline':dict(own,strap=strap_of(own['title'])),
+                'difference':difference,'difference_percent':round(100*difference/own['price'],1)})
+    return {'baseline_models':len(baseline),'items':sorted(items,key=lambda x:(-x['difference'],x['model'],x['competitor']['url'],x['baseline']['url']))}
+
 def change_of(old,item):
     if old is None:return 'new'
     before,previous_status,title,model,year,condition=old
@@ -423,7 +443,7 @@ def comparisons():
         records=c.execute('SELECT site,url,title,brand,model,year,condition,price,image_url,updated,status,missing_runs FROM watches WHERE price > 0 AND missing_runs=0').fetchall()
     fields=['site','url','title','brand','model','year','condition','price','image_url','updated','status','missing_runs']
     rows=[dict(zip(fields,[v.isoformat() if isinstance(v,datetime) else v for v in r])) for r in records]
-    return jsonify(lower_price_items(rows))
+    return jsonify(same_product_items(rows))
 
 @app.get('/api/removals')
 @protected
