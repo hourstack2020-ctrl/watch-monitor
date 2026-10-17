@@ -428,6 +428,27 @@ def monthly_events():
         {'site':site,'counts':{kind:sum(x['event_type']==kind for x in items) for kind in ['listed','removed','returned','initial']},'items':items}
         for site,items in groups.items()]})
 
+@app.get('/api/clock-daily')
+@protected
+def clock_daily():
+    try:day,start,end=removal_window(request.args.get('date'))
+    except ValueError:return jsonify({'error':'日期格式須為 YYYY-MM-DD'}),400
+    with connect() as c:
+        listed=c.execute("SELECT url,title,brand,model,year,condition,price,image_url,detected_at FROM listing_events WHERE site='鐘點站' AND event_type='listed' AND detected_at >= %s AND detected_at < %s ORDER BY detected_at DESC,id DESC",(start,end)).fetchall()
+        changed=c.execute("""WITH changes AS (
+            SELECT url,price,checked,id,lag(price) OVER (PARTITION BY site,url ORDER BY checked,id) AS old_price
+            FROM history WHERE site='鐘點站')
+            SELECT h.url,w.title,w.brand,w.model,w.year,w.condition,h.price,w.image_url,h.checked,h.old_price
+            FROM changes h LEFT JOIN watches w ON w.site='鐘點站' AND w.url=h.url
+            WHERE h.checked >= %s AND h.checked < %s AND h.old_price IS NOT NULL AND h.price <> h.old_price
+            ORDER BY h.checked DESC,h.id DESC""",(start,end)).fetchall()
+    fields=['url','title','brand','model','year','condition','price','image_url','detected_at']
+    def encode(row,keys):return dict(zip(keys,[v.isoformat() if isinstance(v,datetime) else v for v in row]))
+    new=[encode(r,fields) for r in listed]
+    changes=[encode(r,fields+['old_price']) for r in changed]
+    return jsonify({'date':day,'timezone':'Asia/Taipei','listed':new,'changes':changes,
+        'counts':{'listed':len(new),'price_events':len(changes),'price_products':len({r['url'] for r in changes}),'up':sum(r['price']>r['old_price'] for r in changes),'down':sum(r['price']<r['old_price'] for r in changes)}})
+
 @app.get('/api/push/config')
 @protected
 def push_config():return jsonify({'enabled':push.configured(),'publicKey':os.getenv('VAPID_PUBLIC_KEY','')})
