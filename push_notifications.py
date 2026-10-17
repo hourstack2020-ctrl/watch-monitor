@@ -76,33 +76,49 @@ def market_payload(listings,changes):
     up=sum(x['price']>x['old_price'] for x in changes)
     down=len(changes)-up
     lines=[f"上架 {len(listings)}（含重新上架）｜漲價 {up}｜降價 {down}"]
-    for x in listings[:2]:lines.append(f"{x['site']} {x['model'] or (x['title'] or '')[:40]} {'重新上架' if x['event_type']=='returned' else '新上架'}")
-    for x in changes[:2]:lines.append(f"{x['site']} {x['model'] or (x['title'] or '')[:40]} NT${x['old_price']:,} → NT${x['price']:,}")
-    return {'title':'同業上架／價格變動通知','body':'\n'.join(lines),'url':'/#inventorySection','tag':'market-events'}
+    for x in listings[:4]:lines.append(f"{x['site']} {x['model'] or (x['title'] or '')[:40]} {'重新上架' if x['event_type']=='returned' else '新上架'}")
+    for x in changes[:4]:lines.append(f"{x['site']} {x['model'] or (x['title'] or '')[:40]} NT${x['old_price']:,} → NT${x['price']:,}")
+    site=(listings or changes)[0]['site']
+    if len(listings)>4 or len(changes)>4:lines.append('另有更多商品，點擊查看')
+    return {'title':site+'｜上架／價格變動通知','body':'\n'.join(lines),'url':'/#inventorySection','tag':'market-events-'+subscription_id(site)[:12]}
 
 def notify_market_events(connect):
     if not configured():return {'sent':0,'failed':0}
     with connect() as c:subscriptions=c.execute('SELECT id,subscription FROM push_subscriptions').fetchall()
     sent=failed=0
     for sid,subscription in subscriptions:
+        expired=False
         with connect() as c:
             initialize_event_cursor(c,sid)
-            previous=c.execute('SELECT listing_id,history_id FROM push_event_cursor WHERE subscription_id=%s',(sid,)).fetchone()
             ceiling=c.execute('SELECT COALESCE((SELECT max(id) FROM listing_events),0),COALESCE((SELECT max(id) FROM history),0)').fetchone()
-            listings=[dict(zip(['site','url','title','model','price','event_type'],r)) for r in c.execute("""SELECT site,url,title,model,price,event_type FROM listing_events
-                WHERE id>%s AND id<=%s AND site<>%s AND event_type IN ('listed','returned') ORDER BY id""",(previous[0],ceiling[0],'鐘點站')).fetchall()]
-            changes=[dict(zip(['site','url','title','model','price','old_price'],r)) for r in c.execute("""WITH prices AS (
-                SELECT id,site,url,price,lag(price) OVER(PARTITION BY site,url ORDER BY checked,id) old_price
-                FROM history WHERE site<>%s AND id<=%s)
-                SELECT h.site,h.url,w.title,w.model,h.price,h.old_price FROM prices h
-                LEFT JOIN watches w ON w.site=h.site AND w.url=h.url
-                WHERE h.id>%s AND h.old_price IS NOT NULL AND h.price<>h.old_price ORDER BY h.id""",('鐘點站',ceiling[1],previous[1])).fetchall()]
-        if listings or changes:
-            try:send(subscription,market_payload(listings,changes));sent+=1
-            except WebPushException as exc:
-                if exc.response is not None and exc.response.status_code in (404,410):
-                    with connect() as c:c.execute('DELETE FROM push_subscriptions WHERE id=%s',(sid,))
-                failed+=1;continue
-            except Exception:failed+=1;continue
-        with connect() as c:c.execute('UPDATE push_event_cursor SET listing_id=GREATEST(listing_id,%s),history_id=GREATEST(history_id,%s) WHERE subscription_id=%s',(ceiling[0],ceiling[1],sid))
+        for site in ['永生','玩錶舍','雷達站']:
+            with connect() as c:
+                c.execute("""INSERT INTO push_market_cursor(subscription_id,site,listing_id,history_id)
+                    SELECT subscription_id,%s,listing_id,history_id FROM push_event_cursor WHERE subscription_id=%s
+                    ON CONFLICT(subscription_id,site) DO NOTHING""",(site,sid))
+                previous=c.execute('SELECT listing_id,history_id FROM push_market_cursor WHERE subscription_id=%s AND site=%s',(sid,site)).fetchone()
+                listings=[dict(zip(['site','url','title','model','price','event_type'],r)) for r in c.execute("""SELECT site,url,title,model,price,event_type FROM listing_events
+                    WHERE id>%s AND id<=%s AND site=%s AND event_type IN ('listed','returned') ORDER BY id""",(previous[0],ceiling[0],site)).fetchall()]
+                changes=[dict(zip(['site','url','title','model','price','old_price'],r)) for r in c.execute("""WITH prices AS (
+                    SELECT id,site,url,price,lag(price) OVER(PARTITION BY site,url ORDER BY checked,id) old_price
+                    FROM history WHERE site=%s AND id<=%s)
+                    SELECT h.site,h.url,w.title,w.model,h.price,h.old_price FROM prices h
+                    LEFT JOIN watches w ON w.site=h.site AND w.url=h.url
+                    WHERE h.id>%s AND h.old_price IS NOT NULL AND h.price<>h.old_price ORDER BY h.id""",(site,ceiling[1],previous[1])).fetchall()]
+            if listings or changes:
+                try:send(subscription,market_payload(listings,changes));sent+=1
+                except WebPushException as exc:
+                    if exc.response is not None and exc.response.status_code in (404,410):
+                        with connect() as c:c.execute('DELETE FROM push_subscriptions WHERE id=%s',(sid,))
+                        expired=True
+                    failed+=1
+                    if expired:break
+                    continue
+                except Exception:failed+=1;continue
+            with connect() as c:c.execute('UPDATE push_market_cursor SET listing_id=GREATEST(listing_id,%s),history_id=GREATEST(history_id,%s) WHERE subscription_id=%s AND site=%s',(ceiling[0],ceiling[1],sid,site))
+        if not expired:
+            with connect() as c:c.execute("""UPDATE push_event_cursor SET
+                listing_id=(SELECT min(listing_id) FROM push_market_cursor WHERE subscription_id=%s),
+                history_id=(SELECT min(history_id) FROM push_market_cursor WHERE subscription_id=%s)
+                WHERE subscription_id=%s""",(sid,sid,sid))
     return {'sent':sent,'failed':failed}
