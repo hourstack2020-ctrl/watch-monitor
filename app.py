@@ -375,8 +375,8 @@ def login():
 @protected
 def watches():
     with connect() as c:
-        rows=c.execute("SELECT site,url,title,brand,model,year,condition,price,price_text,updated,status,image_url,source_order,price_changed_at,missing_runs FROM watches ORDER BY price_changed_at DESC NULLS LAST,CASE site WHEN '鐘點站' THEN 0 WHEN '永生' THEN 1 WHEN '玩錶舍' THEN 2 WHEN '雷達站' THEN 3 ELSE 4 END,source_order NULLS LAST,url LIMIT 20000").fetchall()
-    return jsonify([dict(zip(['site','url','title','brand','model','year','condition','price','price_text','updated','status','image_url','source_order','price_changed_at','missing_runs'],[v.isoformat() if isinstance(v,datetime) else v for v in r])) for r in rows])
+        rows=c.execute("SELECT site,url,title,brand,model,year,condition,price,price_text,updated,status,image_url,source_order,price_changed_at,missing_runs,(SELECT e.detected_at FROM listing_events e WHERE e.site=watches.site AND e.url=watches.url AND e.event_type='listed' ORDER BY e.detected_at LIMIT 1) AS listed_at FROM watches ORDER BY price_changed_at DESC NULLS LAST,CASE site WHEN '鐘點站' THEN 0 WHEN '永生' THEN 1 WHEN '玩錶舍' THEN 2 WHEN '雷達站' THEN 3 ELSE 4 END,source_order NULLS LAST,url LIMIT 20000").fetchall()
+    return jsonify([dict(zip(['site','url','title','brand','model','year','condition','price','price_text','updated','status','image_url','source_order','price_changed_at','missing_runs','listed_at'],[v.isoformat() if isinstance(v,datetime) else v for v in r])) for r in rows])
 
 @app.get('/api/status')
 @protected
