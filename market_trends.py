@@ -60,6 +60,15 @@ def normalize(item, detail=None):
                 image_url=image, url='https://www.vipstation.com.hk/tc/item/' + quote(slug, safe='-()') + '.html')
 
 
+def model_from_catalog(item):
+    code=re.sub('[^A-Z0-9]','',item['ST_CODE'].upper())
+    candidates=re.findall(r'(?<![A-Za-z0-9])(?:RM\s*)?[A-Za-z0-9][A-Za-z0-9./_-]{3,}',item['ST_NAME'],re.I)
+    if item.get('ST_ITEMGROUP')=='ROLEX' and code[:6].isdigit():
+        refs=[x.strip() for x in candidates if re.match(r'^M?'+re.escape(code[:6])+r'(?:[^0-9]|$)',x,re.I)]
+        if refs:return max(refs,key=len)
+    matches=[x.strip() for x in candidates if re.search(r'\d',x) and code.startswith(re.sub('[^A-Z0-9]','',x.upper()))]
+    return max(matches,key=len) if matches else None
+
 def fetch_catalog(progress=lambda value:None):
     products, seen_source, menus = {}, set(), []
     slugs = ['patek-philippe','rolex','richard-mille','audemars-piguet']
@@ -74,11 +83,6 @@ def fetch_catalog(progress=lambda value:None):
             except (requests.ConnectionError,requests.Timeout,requests.exceptions.ChunkedEncodingError):
                 if attempt==2:raise
                 time.sleep((3,8)[attempt])
-    def model_from_catalog(item):
-        code=re.sub('[^A-Z0-9]','',item['ST_CODE'].upper())
-        candidates=re.findall(r'(?<![A-Za-z0-9])(?:RM\s*)?[A-Za-z0-9][A-Za-z0-9./_-]{3,}',item['ST_NAME'],re.I)
-        matches=[x.strip() for x in candidates if re.search(r'\d',x) and code.startswith(re.sub('[^A-Z0-9]','',x.upper()))]
-        return max(matches,key=len) if matches else None
     with requests.Session() as client:
         client.cookies.set('n_vip_curr','HKD',domain='www.vipstation.com.hk',path='/')
         client.headers['User-Agent']='HourStackPriceMonitor/1.0 (daily public listing quotes)'
@@ -196,7 +200,7 @@ def install(app, connect, protected):
         with connect() as c:
             if not c.execute('SELECT pg_try_advisory_xact_lock(68234017)').fetchone()[0]:
                 return jsonify(error='行情正在更新中'), 409
-            row = c.execute("INSERT INTO market_update_state(singleton,status,started,error) VALUES(true,'pending',now(),'') ON CONFLICT(singleton) DO UPDATE SET status='pending',started=now(),finished=NULL,error='' WHERE market_update_state.status NOT IN ('pending','running') OR market_update_state.started < now()-interval '30 minutes' RETURNING singleton").fetchone()
+            row = c.execute("INSERT INTO market_update_state(singleton,status,started,error) VALUES(true,'pending',now(),'') ON CONFLICT(singleton) DO UPDATE SET status='pending',started=now(),finished=NULL,error='' WHERE market_update_state.status<>'pending' OR market_update_state.started < now()-interval '2 minutes' RETURNING singleton").fetchone()
             if not row:
                 return jsonify(error='行情正在更新中'), 409
         try:
