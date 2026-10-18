@@ -238,7 +238,7 @@ def install(app, connect, protected):
             if menu['brand'] in VISIBLE_SERIES:menu['series']=[s for s in menu['series'] if s in VISIBLE_SERIES[menu['brand']]]
         return jsonify(items=items,brands=list(BRANDS.values()),updated=max((x['updated'] for x in updates.values()),default=None),
             date=max((x['date'] for x in updates.values()),default=None),source=SOURCE,update_state=update_state,
-            source_menu={'category':'手錶','menus':menus,'skipped_count':len(skipped),'skipped_items':skipped},brand_updates=updates)
+            source_menu={'category':'手錶','menus':menus},brand_updates=updates)
 
     @app.post('/api/market-trends/refresh')
     @protected
