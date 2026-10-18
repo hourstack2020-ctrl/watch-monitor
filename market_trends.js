@@ -1,4 +1,4 @@
-let marketData=null,marketPoll=null;
+let marketData=null,marketPoll=null,marketLimit=20;
 const marketHKD=value=>'HK$ '+Number(value).toLocaleString('zh-HK');
 function marketChart(history){
   if(!history.length)return '<p class="muted">尚無歷史資料</p>';
@@ -11,23 +11,31 @@ function marketChart(history){
   const line=paths.map(s=>`<polyline points="${s.map(p=>x(p)+','+y(p)).join(' ')}" fill="none" stroke="#315d86" stroke-width="2.5"/>`).join('');
   return `<svg viewBox="0 0 320 150" role="img" aria-label="每日港幣售價走勢，共 ${points.length} 天"><line x1="54" y1="120" x2="300" y2="120" stroke="#d5dfeb"/><text x="0" y="24" font-size="10" fill="#687d93">${Math.round(max).toLocaleString('zh-HK')}</text><text x="0" y="112" font-size="10" fill="#687d93">${Math.round(min).toLocaleString('zh-HK')}</text>${line}${points.map(p=>`<circle cx="${x(p)}" cy="${y(p)}" r="3.5" fill="#315d86"><title>${esc(p.date)}：${marketHKD(p.price)}</title></circle>`).join('')}<text x="54" y="140" font-size="10" fill="#687d93">${esc(points[0].date)}</text><text x="300" y="140" text-anchor="end" font-size="10" fill="#687d93">${points.length>1?esc(points.at(-1).date):'開始累積'}</text></svg>`;
 }
-function marketOptions(){
- const brand=$('marketBrand').value,old=$('marketSeries').value;
- const series=[...new Set(marketData.items.filter(x=>!brand||x.brand===brand).map(x=>x.series))].sort();
+function marketOptions(reset=true){
+ const brand=$('marketBrand').value,old=$('marketSeries').value,oldPrice=$('marketPrice').value;
+ const menus=(marketData.source_menu?.menus||[]).filter(x=>!brand||x.brand===brand);
+ const series=[...new Set(menus.flatMap(x=>x.series||[]))];
  $('marketSeries').innerHTML='<option value="">全部系列</option>'+series.map(s=>`<option>${esc(s)}</option>`).join('');
  $('marketSeries').value=series.includes(old)?old:'';
- renderMarketTrends();
+ const prices=[...new Set(menus.flatMap(x=>x.price_ranges||[]))];
+ $('marketPrice').innerHTML='<option value="">價格(HKD)：全部</option>'+prices.map(s=>`<option value="${esc(s)}">HK$ ${esc(s)}</option>`).join('');
+ $('marketPrice').value=prices.includes(oldPrice)?oldPrice:'';
+ renderMarketTrends(reset);
 }
-function renderMarketTrends(){
+function renderMarketTrends(reset=true){
+ if(reset)marketLimit=20;
  if(!marketData)return;
  const brand=$('marketBrand').value,series=$('marketSeries').value,q=$('marketSearch').value.trim().toLowerCase(),days=Number($('marketDays').value);
  const order=marketData.brands;
- let rows=marketData.items.filter(x=>(!brand||x.brand===brand)&&(!series||x.series===series)&&(!q||[x.title,x.model,x.series].join(' ').toLowerCase().includes(q)));
+ const range=$('marketPrice').value.match(/([0-9]+)\s*-\s*([0-9]+)/);
+ const priceOK=x=>!range||(x.price>=Number(range[1])&&x.price<=Number(range[2]));
+ let rows=marketData.items.filter(x=>priceOK(x)&&(!brand||x.brand===brand)&&(!series||x.series===series)&&(!q||[x.title,x.model,x.series].join(' ').toLowerCase().includes(q)));
  rows.sort((a,b)=>order.indexOf(a.brand)-order.indexOf(b.brand)||(a.series==='Nautilus'?0:1)-(b.series==='Nautilus'?0:1)||a.series.localeCompare(b.series)||a.model.localeCompare(b.model)||a.source_id.localeCompare(b.source_id));
  $('marketCount').textContent=rows.length+' 件';
  const cutoff=Date.parse((marketData.date||'2000-01-01')+'T00:00:00Z')-(days-1)*86400000;
  let heading='';
- $('marketCards').innerHTML=rows.map(x=>{
+ $('marketMore').hidden=rows.length<=marketLimit;
+ $('marketCards').innerHTML=rows.slice(0,marketLimit).map(x=>{
    let group='';const key=x.brand+'｜'+x.series;if(key!==heading){heading=key;group=`<h3 style="grid-column:1/-1;margin:12px 0 0">${esc(x.brand)} · ${esc(x.series)}</h3>`}
    const change=x.previous_price===null?null:x.price-x.previous_price;
    const changeText=change===null?'尚無前一天資料 · 待累積':change===0?'與前一天持平':`${change>0?'▲ 漲價':'▼ 降價'} ${marketHKD(Math.abs(change))}（${(Math.abs(change)/x.previous_price*100).toFixed(2)}%）`;
@@ -47,10 +55,10 @@ async function loadMarketTrends(){
   const state=d.update_state||{};
   $('marketRefresh').disabled=!!state.running;
   $('marketRefresh').textContent=state.running?'行情更新中…':'更新行情';
-  $('marketUpdateState').textContent=state.running?'只更新 VIP Station 行情，不會更新原本四家商品。':state.error||(state.status==='completed'?'行情更新完成':'行情可獨立手動更新');
+  $('marketUpdateState').textContent=state.running?(state.progress||'只更新 VIP Station 行情，不會更新原本四家商品。'):state.error||(state.status==='completed'?'行情更新完成':'行情可獨立手動更新');
   if(state.running)marketPoll=setTimeout(loadMarketTrends,4000);
   $('marketUpdated').textContent=d.updated?'資料更新：'+new Date(d.updated).toLocaleString('zh-TW',{timeZone:'Asia/Taipei'})+'｜每日 12:00 更新（台灣時間）':'正在建立首日資料，請稍後重新開啟此頁籤';
-  marketOptions();
+  marketOptions(false);
  }catch(e){$('marketUpdated').textContent='行情資料暫時無法讀取：'+e.message}
 }
 async function refreshMarketManually(){
