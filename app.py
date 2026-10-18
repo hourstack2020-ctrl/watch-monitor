@@ -612,7 +612,7 @@ if __name__=='__main__':
     import sys
     if len(sys.argv)>1 and sys.argv[1] in ('market','market-force'):
         from market_trends import refresh_if_due
-        try:refresh_if_due(connect,force=sys.argv[1]=='market-force')
+        try:refresh_if_due(connect,force=sys.argv[1]=='market-force',brand_slug=sys.argv[2] if len(sys.argv)>2 else None)
         except Exception:logging.exception('VIP Station update failed; retained previous snapshot')
     elif len(sys.argv)>1 and sys.argv[1] in ('crawl','crawl-products'):
         market_job=None
