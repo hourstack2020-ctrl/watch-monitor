@@ -448,6 +448,14 @@ def home():return send_file('index.html' if auth_ok() else 'login.html')
 def login():
     return account_login()
 
+from market_trends import install as install_market_trends
+install_market_trends(app, connect, protected)
+
+@app.get('/market-trends.js')
+@protected
+def market_script():
+    return send_file('market_trends.js')
+
 @app.get('/api/watches')
 @protected
 def watches():
@@ -602,6 +610,10 @@ def manual():
 
 if __name__=='__main__':
     import sys
-    if len(sys.argv)>1 and sys.argv[1]=='crawl':print('Extracted rows:',crawl())
+    if len(sys.argv)>1 and sys.argv[1] in ('crawl','market'):
+        from market_trends import refresh_if_due
+        try:refresh_if_due(connect)
+        except Exception:logging.exception('VIP Station daily market update failed; retained previous complete snapshot')
+        if sys.argv[1]=='crawl':print('Extracted rows:',crawl())
     elif len(sys.argv)>1 and sys.argv[1]=='init':init_db()
     else:app.run(host='0.0.0.0',port=int(os.getenv('PORT','10000')))
