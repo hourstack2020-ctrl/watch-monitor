@@ -42,8 +42,8 @@ def notify_low_prices(connect,compare):
         subscriptions=c.execute('SELECT id,subscription FROM push_subscriptions').fetchall()
     if not subscriptions:return {'sent':0,'failed':0}
     with connect() as c:
-        fields=['site','url','title','price','status','missing_runs']
-        rows=[dict(zip(fields,r)) for r in c.execute('SELECT site,url,title,price,status,missing_runs FROM watches WHERE price>0 AND missing_runs=0').fetchall()]
+        fields=['site','url','title','price','status','missing_runs','image_url']
+        rows=[dict(zip(fields,r)) for r in c.execute('SELECT site,url,title,price,status,missing_runs,image_url FROM watches WHERE price>0 AND missing_runs=0').fetchall()]
     matches=compare(rows)['items'];sent=failed=0
     for sid,subscription in subscriptions:
         with connect() as c:
