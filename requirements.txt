@@ -4,3 +4,8 @@ beautifulsoup4>=4.12,<5
 psycopg[binary]>=3.2,<4
 gunicorn>=22,<24
 pywebpush==2.5.0
+
+# Local image colour checks; no external vision API.
+opencv-python-headless==4.14.0.94
+numpy>=2,<3
+Pillow>=12,<13
