@@ -76,7 +76,7 @@ def model_from_catalog(item):
     return max(matches,key=len) if matches else None
 
 def fetch_catalog(progress=lambda value:None, brand_slug=None):
-    products, seen_source, menus = {}, set(), []
+    products, seen_source, menus, skipped = {}, set(), [], []
     if brand_slug not in BRAND_SLUGS:raise ValueError('請選取有效品牌')
     slugs = [brand_slug]
     page_count = 0
@@ -124,19 +124,24 @@ def fetch_catalog(progress=lambda value:None, brand_slug=None):
                         code=item.get('ST_CODE')
                         if not code or code in local_seen:raise ValueError('來源分頁重複')
                         local_seen.add(code);seen_source.add(code)
-                        basic=normalize(item)
-                        if not basic:continue
-                        if BRANDS.get(item.get('ST_ITEMGROUP'))!=brand:raise ValueError('來源混入非選取品牌')
-                        model=model_from_catalog(item)
-                        if model and chosen:
-                            detail=dict(ST_CODE=code,ST_WEB_SUBCATALOG=brand,ST_PRODETAILS=[{'ST_KEY':'型號','ST_VALUE':model},{'ST_KEY':'系列','ST_VALUE':chosen}])
-                        else:
-                            detail=variable(get(client,basic['url']),'iteminfo')
-                        product=normalize(item,detail)
-                        # A product appearing under multiple source labels remains one listing.
-                        products.setdefault(code,product)
+                        try:
+                            basic=normalize(item)
+                            if not basic:continue
+                            if BRANDS.get(item.get('ST_ITEMGROUP'))!=brand:raise ValueError('來源混入非選取品牌')
+                            model=model_from_catalog(item)
+                            if model and chosen:
+                                detail=dict(ST_CODE=code,ST_WEB_SUBCATALOG=brand,ST_PRODETAILS=[{'ST_KEY':'型號','ST_VALUE':model},{'ST_KEY':'系列','ST_VALUE':chosen}])
+                            else:
+                                detail=variable(get(client,basic['url']),'iteminfo')
+                            product=normalize(item,detail)
+                            # A product appearing under multiple source labels remains one listing.
+                            products.setdefault(code,product)
+                        except (requests.RequestException,ValueError,KeyError,TypeError,AttributeError) as exc:
+                            skipped.append({'source_id':str(code),'error':type(exc).__name__,'message':str(exc)[:300]})
+                            logging.warning('VIP Station skipped item %s: %s',code,exc)
+                            continue
     if not products:raise ValueError('此品牌沒有可核對的公開港幣報價，保留上次資料')
-    return list(products.values()),page_count,len(seen_source),{'category':'手錶','menus':menus}
+    return list(products.values()),page_count,len(seen_source),{'category':'手錶','menus':menus,'skipped_count':len(skipped),'skipped_items':skipped}
 
 
 def save_brand_snapshot(connect, slug, products, pages, total, metadata, checked):
@@ -172,7 +177,7 @@ def refresh_if_due(connect, force=False, brand_slug=None):
             if not targets:return False
             with connect() as c:
                 c.execute("INSERT INTO market_update_state(singleton,status,started,error,progress) VALUES(true,'running',now(),'','') ON CONFLICT(singleton) DO UPDATE SET status='running',started=now(),finished=NULL,error='',progress=''")
-            succeeded,failed=[],[]
+            succeeded,failed,skipped_total=[],[],0
             def progress(value):
                 with connect() as c:c.execute('UPDATE market_update_state SET progress=%s WHERE singleton=true',(value,))
             for slug in targets:
@@ -180,6 +185,7 @@ def refresh_if_due(connect, force=False, brand_slug=None):
                     progress(BRAND_SLUGS[slug]+'｜開始獨立更新')
                     products,pages,total,metadata=fetch_catalog(progress,slug)
                     save_brand_snapshot(connect,slug,products,pages,total,metadata,datetime.now(TZ))
+                    skipped_total+=metadata.get('skipped_count',0)
                     succeeded.append(BRAND_SLUGS[slug])
                     progress(BRAND_SLUGS[slug]+'｜更新完成，已發布 '+str(len(products))+' 筆報價')
                 except Exception:
@@ -188,6 +194,7 @@ def refresh_if_due(connect, force=False, brand_slug=None):
                     # Continue other brands; a failed brand never rolls back another brand.
             status='partial' if succeeded and failed else 'failed' if failed else 'completed'
             error=('更新失敗，保留舊資料：'+'、'.join(failed)) if failed else ''
+            if skipped_total:error+=('；' if error else '')+'已略過錯誤商品 '+str(skipped_total)+' 筆'
             summary='已完成 '+str(len(succeeded))+' 個品牌'+('；失敗 '+str(len(failed))+' 個品牌' if failed else '')
             with connect() as c:
                 c.execute("UPDATE market_update_state SET status=%s,finished=now(),error=%s,progress=%s WHERE singleton=true",(status,error,summary))
@@ -231,7 +238,7 @@ def install(app, connect, protected):
             if menu['brand'] in VISIBLE_SERIES:menu['series']=[s for s in menu['series'] if s in VISIBLE_SERIES[menu['brand']]]
         return jsonify(items=items,brands=list(BRANDS.values()),updated=max((x['updated'] for x in updates.values()),default=None),
             date=max((x['date'] for x in updates.values()),default=None),source=SOURCE,update_state=update_state,
-            source_menu={'category':'手錶','menus':menus},brand_updates=updates)
+            source_menu={'category':'手錶','menus':menus,'skipped_count':len(skipped),'skipped_items':skipped},brand_updates=updates)
 
     @app.post('/api/market-trends/refresh')
     @protected
