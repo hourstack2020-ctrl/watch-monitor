@@ -10,3 +10,6 @@ CREATE TABLE IF NOT EXISTS public.market_brand_snapshots (
 ALTER TABLE public.market_brand_snapshots ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.market_brand_snapshots FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE ON public.market_brand_snapshots TO watch_monitor_app;
+
+CREATE POLICY market_brand_backend ON public.market_brand_snapshots
+    FOR ALL TO watch_monitor_app USING (true) WITH CHECK (true);
