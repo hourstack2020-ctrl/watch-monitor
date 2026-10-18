@@ -2,6 +2,9 @@
 import hashlib
 import json
 import logging
+import subprocess
+import sys
+import os
 import re
 import time
 import unicodedata
@@ -12,7 +15,7 @@ import requests
 from flask import jsonify, request
 
 SOURCE = 'https://www.vipstation.com.hk/tc/pre-owned-watches'
-BRANDS = {'PP':'Patek Philippe','ROLEX':'Rolex','RICHARD MILLE':'Richard Mille','AP':'Audemars Piguet'}
+BRANDS = {'PP':'Patek Philippe 百達翡麗','ROLEX':'Rolex 勞力士','RICHARD MILLE':'Richard Mille 理查德米勒','AP':'Audemars Piguet 愛彼'}
 TZ = ZoneInfo('Asia/Taipei')
 
 
@@ -23,7 +26,7 @@ def variable(html, name):
     return json.JSONDecoder().raw_decode(html[match.end():])[0]
 
 
-def normalize(item):
+def normalize(item, detail=None):
     brand = BRANDS.get(item.get('ST_ITEMGROUP'))
     title = item.get('ST_NAME', '')
     price = item.get('NO_PRICE')
@@ -33,21 +36,17 @@ def normalize(item):
         return None
     if item.get('ST_CURR') not in ('', None, 'HKD'):
         raise ValueError('來源幣值不是 HKD，保留上次資料')
-    model_match = re.search(r'(?:自動|手動|石英)機芯\s+(.+?)\s+(?:\d{1,3}\s*%|全新|未使用|二手)', title, re.I)
-    if not model_match:
-        return None
-    model = model_match.group(1).strip().upper()
-    upper = title.upper()
-    series = next((s for token, s in [
-        ('NAUTILUS','Nautilus'),('AQUANAUT','Aquanaut'),('GRAND COMPLICATIONS','Grand Complications'),
-        ('ANNIVERSARY SERIES','Anniversary Series'),('CALATRAVA','Calatrava'),('GONDOLO','Gondolo'),
-        ('ROYAL OAK OFFSHORE','Royal Oak Offshore'),('ROYAL OAK CONCEPT','Royal Oak Concept'),
-        ('ROYAL OAK','Royal Oak'),('CODE 11.59','Code 11.59'),('CANAPE','Canape'),
-        ('DAYTONA','Daytona'),('SKY-DWELLER','Sky-Dweller'),('DAY-DATE','Day-Date'),
-        ('DATEJUST','Datejust'),('SUBMARINER','Submariner'),('GMT-MASTER','GMT-Master'),
-        ('SEA-DWELLER','Sea-Dweller'),('YACHT MASTER','Yacht-Master'),('EXPLORER','Explorer'),
-        ('LADIES','Ladies'),('男仕系列','Men')]
-        if token in upper), '系列未標示')
+    if detail is None:
+        model, series = '', ''
+    else:
+        if detail.get('ST_CODE') != item.get('ST_CODE'):
+            raise ValueError('商品詳細頁編號不符，保留上次資料')
+        fields = {x['ST_KEY']:x.get('ST_VALUE','') for x in detail.get('ST_PRODETAILS', [])}
+        brand = str(detail.get('ST_WEB_SUBCATALOG') or '').strip()
+        series = str(fields.get('系列') or '').strip() or '來源未提供系列'
+        model = str(fields.get('型號') or detail.get('ST_TYPE') or '').strip()
+        if not brand or not model:
+            raise ValueError('來源未提供品牌或型號')
     variant = re.sub(r'\s+', '', unicodedata.normalize('NFKC', title)).upper()
     image = item.get('ST_IMG', '')
     if not image.startswith('https://img.vipstation.com.hk/'):
@@ -93,7 +92,11 @@ def fetch_catalog():
                 codes.add(code)
                 product = normalize(item)
                 if product:
-                    output.append(product)
+                    time.sleep(2)
+                    detail_response = client.get(product['url'], timeout=(10, 35))
+                    detail_response.raise_for_status()
+                    detail = variable(detail_response.text, 'iteminfo')
+                    output.append(normalize(item, detail))
             if page == pages:
                 break
             time.sleep(2)
@@ -102,7 +105,7 @@ def fetch_catalog():
     return output, pages, len(codes)
 
 
-def refresh_if_due(connect):
+def refresh_if_due(connect, force=False):
     now = datetime.now(TZ)
     with connect() as lock:
         if not lock.execute('SELECT pg_try_advisory_lock(68234017)').fetchone()[0]:
@@ -110,15 +113,17 @@ def refresh_if_due(connect):
         try:
             last = lock.execute("SELECT checked_at FROM market_trend_runs WHERE status='completed' ORDER BY checked_at DESC LIMIT 1").fetchone()
             # Bootstrap once; thereafter the existing noon cron is the only daily trigger.
-            if last and (now.hour != 12 or last[0].astimezone(TZ) >= now.replace(hour=12,minute=0,second=0,microsecond=0)):
+            if not force and last and (now.hour != 12 or last[0].astimezone(TZ) >= now.replace(hour=12,minute=0,second=0,microsecond=0)):
                 return False
+            with connect() as c:
+                c.execute("INSERT INTO market_update_state(singleton,status,started,error) VALUES(true,'running',now(),'') ON CONFLICT(singleton) DO UPDATE SET status='running',started=now(),finished=NULL,error=''")
             products, pages, total = fetch_catalog()
             checked = datetime.now(TZ)
             with connect() as c:
                 for p in products:
                     c.execute('''INSERT INTO market_trend_products(source_id,variant_key,brand,series,model,title,image_url,url)
                         VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(source_id,variant_key) DO UPDATE SET
-                        title=EXCLUDED.title,image_url=EXCLUDED.image_url,url=EXCLUDED.url''',
+                        brand=EXCLUDED.brand,series=EXCLUDED.series,model=EXCLUDED.model,title=EXCLUDED.title,image_url=EXCLUDED.image_url,url=EXCLUDED.url''',
                         tuple(p[k] for k in ('source_id','variant_key','brand','series','model','title','image_url','url')))
                     c.execute('''INSERT INTO market_trend_prices(source_id,variant_key,observed_date,price,checked_at)
                         VALUES(%s,%s,%s,%s,%s) ON CONFLICT(source_id,variant_key,observed_date) DO UPDATE
@@ -128,7 +133,12 @@ def refresh_if_due(connect):
                     VALUES(%s,%s,'completed',%s,%s,%s,'') ON CONFLICT(observed_date) DO UPDATE
                     SET checked_at=EXCLUDED.checked_at,status='completed',count=EXCLUDED.count,pages=EXCLUDED.pages,source_count=EXCLUDED.source_count,error=''""",
                     (now.date(),checked,len(products),pages,total))
+                c.execute("UPDATE market_update_state SET status='completed',finished=now(),error='' WHERE singleton=true")
             return True
+        except Exception:
+            with connect() as c:
+                c.execute("UPDATE market_update_state SET status='failed',finished=now(),error='來源更新失敗，已保留上次完整資料，請稍後重試' WHERE singleton=true")
+            raise
         finally:
             lock.execute('SELECT pg_advisory_unlock(68234017)')
 
@@ -138,9 +148,12 @@ def install(app, connect, protected):
     @protected
     def trends():
         with connect() as c:
+            state = c.execute("SELECT status,started,finished,error FROM market_update_state WHERE singleton=true").fetchone()
+            running = bool(state and state[0] in ('pending','running') and state[1] > datetime.now(TZ)-timedelta(minutes=30))
+            update_state = {'running':running,'status':state[0] if state else 'idle','error':state[3] if state else ''}
             last = c.execute("SELECT observed_date,checked_at,count FROM market_trend_runs WHERE status='completed' ORDER BY checked_at DESC LIMIT 1").fetchone()
             if not last:
-                return jsonify(items=[], brands=list(BRANDS.values()), updated=None, source=SOURCE)
+                return jsonify(items=[], brands=list(BRANDS.values()), updated=None, source=SOURCE, update_state=update_state)
             rows = c.execute('''SELECT p.source_id,p.variant_key,p.brand,p.series,p.model,p.title,p.image_url,p.url,
                 h.price,prev.price,(SELECT jsonb_agg(jsonb_build_object('date',d.observed_date,'price',d.price) ORDER BY d.observed_date)
                 FROM market_trend_prices d WHERE d.source_id=p.source_id AND d.variant_key=p.variant_key AND d.observed_date >= %s)
@@ -150,4 +163,23 @@ def install(app, connect, protected):
                 (last[0]-timedelta(days=365),last[0],last[1])).fetchall()
         fields=['source_id','variant_key','brand','series','model','title','image_url','url','price','previous_price','history']
         return jsonify(items=[dict(zip(fields,r)) for r in rows],brands=list(BRANDS.values()),
-                       updated=last[1].isoformat(),date=last[0].isoformat(),source=SOURCE)
+                       updated=last[1].isoformat(),date=last[0].isoformat(),source=SOURCE,update_state=update_state)
+
+    @app.post('/api/market-trends/refresh')
+    @protected
+    def manual_market_refresh():
+        if request.headers.get('X-Watch-Monitor') != '1':
+            return jsonify(error='Missing request header'), 403
+        with connect() as c:
+            if not c.execute('SELECT pg_try_advisory_xact_lock(68234017)').fetchone()[0]:
+                return jsonify(error='行情正在更新中'), 409
+            row = c.execute("INSERT INTO market_update_state(singleton,status,started,error) VALUES(true,'pending',now(),'') ON CONFLICT(singleton) DO UPDATE SET status='pending',started=now(),finished=NULL,error='' WHERE market_update_state.status NOT IN ('pending','running') OR market_update_state.started < now()-interval '30 minutes' RETURNING singleton").fetchone()
+            if not row:
+                return jsonify(error='行情正在更新中'), 409
+        try:
+            subprocess.Popen([sys.executable,os.path.join(app.root_path,'app.py'),'market-force'],cwd=app.root_path)
+        except Exception:
+            with connect() as c:
+                c.execute("UPDATE market_update_state SET status='failed',finished=now(),error='無法啟動行情更新，請重試' WHERE singleton=true")
+            return jsonify(error='無法啟動行情更新'), 503
+        return jsonify(started=True), 202
