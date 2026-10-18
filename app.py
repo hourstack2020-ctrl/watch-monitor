@@ -41,13 +41,8 @@ def init_db():
 def session_auth_version():
     return hmac.new((app.secret_key or '').encode(),os.environ.get('ADMIN_PASSWORD','').encode(),hashlib.sha256).hexdigest()
 
-def auth_ok():
-    secret=os.environ.get('ADMIN_PASSWORD','')
-    if not secret:return False
-    credentials=request.authorization
-    if credentials and credentials.type.lower()=='basic':
-        if hmac.compare_digest((credentials.username or '').encode('utf-8'),b'HS') and hmac.compare_digest((credentials.password or '').encode('utf-8'),secret.encode('utf-8')):return True
-    return bool(app.secret_key and session.get('user')=='HS' and hmac.compare_digest(session.get('auth_version',''),session_auth_version()))
+from account_settings import install as install_account_settings
+auth_ok, account_login = install_account_settings(app, connect, session_auth_version)
 
 def protected(fn):
     @wraps(fn)
@@ -451,15 +446,7 @@ def home():return send_file('index.html' if auth_ok() else 'login.html')
 
 @app.post('/api/login')
 def login():
-    if request.headers.get('X-Watch-Monitor')!='1':return jsonify({'error':'Missing request header'}),403
-    if not app.secret_key:return jsonify({'error':'登入服務正在更新，請稍後重試'}),503
-    body=request.get_json(silent=True) or {}
-    if not isinstance(body,dict):return jsonify({'error':'帳號或密碼不正確'}),401
-    username=body.get('username');password=body.get('password');secret=os.getenv('ADMIN_PASSWORD','')
-    if not isinstance(username,str) or not isinstance(password,str) or not secret or len(username)>100 or len(password)>256:return jsonify({'error':'帳號或密碼不正確'}),401
-    if not hmac.compare_digest(username.encode(),b'HS') or not hmac.compare_digest(password.encode(),secret.encode()):return jsonify({'error':'帳號或密碼不正確'}),401
-    session.clear();session.permanent=True;session['user']='HS';session['auth_version']=session_auth_version()
-    return jsonify({'ok':True})
+    return account_login()
 
 @app.get('/api/watches')
 @protected
