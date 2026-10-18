@@ -86,6 +86,7 @@ def model_of(t):
 
 def dial_color_of(title):
     # Only explicit dial descriptions; never infer from bezel, strap or nickname.
+    if re.search(r'(?:銀灰|灰銀)(?:色)?(?:太陽放射紋|太陽紋|放射紋)?(?:面盤|錶盤|錶面|面)',title):return ''
     colors=r'煙燻綠|煙燻藍|煙燻灰|天藍|蒂芙尼藍|TIFFANY藍|冰藍|淺藍|深藍|亮藍|海軍藍|午夜藍|薄荷綠|橄欖綠|墨綠|深綠|淺綠|綠松石|香檳金|香檳|玫瑰金|巧克力|咖啡|棕|褐|黑|白|銀|金|灰|藍|綠|紅|粉紅|粉|紫|黃|橘|橙'
     pattern=r'('+colors+r')(?:色)?(?:太陽放射紋|太陽紋|放射紋|波紋|條紋|巴黎釘紋|旭日紋|格紋|鏤空|漆|珍珠母貝|貝殼)?(?:面盤|錶盤|錶面|面)(?!盤?時標|框|圈)'
     found={m.group(1) for m in re.finditer(pattern,title)}
@@ -151,10 +152,29 @@ def strap_of(title):
     if re.search(r'副廠|改裝|另附|另贈|替換錶帶|更換錶帶',title):return ''
     return styles[0] if len(set(styles))==1 else ''
 
+# User-confirmed dial colours apply only to these exact listings, not every 126334.
+CONFIRMED_DIAL_COLORS = {
+    ('鐘點站','www.hourstack.com.tw','18351'): '銀',
+    ('永生','www.egps.com.tw','199381'): '灰',
+}
+
+def item_dial_color(item):
+    title=item.get('title') or ''
+    parsed=urllib.parse.urlsplit(item.get('url') or '')
+    listing_id=urllib.parse.parse_qs(parsed.query).get('ID',[''])[0]
+    confirmed=CONFIRMED_DIAL_COLORS.get((item.get('site'),parsed.hostname,listing_id))
+    if confirmed and parsed.path.lower()=='/product_open.asp' and model_of(title)=='126334' and '銀灰色面盤' in title:
+        return dial_color_of(title.replace('銀灰色面盤',confirmed+'色面盤',1))
+    # eGPS uses products_open.asp.
+    if confirmed and parsed.path.lower()=='/products_open.asp' and model_of(title)=='126334' and '銀灰色面盤' in title:
+        return dial_color_of(title.replace('銀灰色面盤',confirmed+'色面盤',1))
+    return dial_color_of(title)
+
+
 def comparison_attributes(item):
     title=item.get('title') or ''
     years=set(re.findall(r'(20\d{2})\s*年\s*(?:(?:新式|木紋|電子)\s*)*(?:保卡|保單|保證書)',title))
-    return dial_color_of(title),(next(iter(years)) if len(years)==1 else ''),strap_of(title)
+    return item_dial_color(item),(next(iter(years)) if len(years)==1 else ''),strap_of(title)
 
 def comparison_key(item):
     brand=brand_of(item['title'])
@@ -187,7 +207,7 @@ def same_product_items(rows):
     baseline={};competitors=[];grouped={}
     for row in rows:
         if row.get('missing_runs',0)>0 or row.get('status')=='possibly_removed' or not row.get('price') or row['price']<=0:continue
-        brand=brand_of(row['title']);model=model_of(row['title']);dial=dial_color_of(row['title'])
+        brand=brand_of(row['title']);model=model_of(row['title']);dial=item_dial_color(row)
         if brand=='其他' or not model or not dial:continue
         normalized=re.sub(r'[^A-Z0-9]','',model.upper())
         if brand=='Panerai':normalized='PAM'+str(int(normalized[3:]))
