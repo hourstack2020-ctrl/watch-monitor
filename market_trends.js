@@ -1,4 +1,4 @@
-let marketData=null;
+let marketData=null,marketPoll=null;
 const marketHKD=value=>'HK$ '+Number(value).toLocaleString('zh-HK');
 function marketChart(history){
   if(!history.length)return '<p class="muted">尚無歷史資料</p>';
@@ -37,11 +37,29 @@ function renderMarketTrends(){
  }).join('')||'<p class="muted">來源目前沒有符合條件的在售公開報價；不以售罄或詢價資料代替。</p>';
 }
 async function loadMarketTrends(){
+ clearTimeout(marketPoll);
  $('marketUpdated').textContent='讀取行情資料…';
  try{
   const r=await fetch('/api/market-trends');const d=await r.json();if(!r.ok)throw Error(d.error||'讀取失敗');marketData=d;
+  const selected=$('marketBrand').value;
+  $('marketBrand').innerHTML='<option value="">全部品牌</option>'+d.brands.map(b=>`<option>${esc(b)}</option>`).join('');
+  $('marketBrand').value=d.brands.includes(selected)?selected:'';
+  const state=d.update_state||{};
+  $('marketRefresh').disabled=!!state.running;
+  $('marketRefresh').textContent=state.running?'行情更新中…':'更新行情';
+  $('marketUpdateState').textContent=state.running?'只更新 VIP Station 行情，不會更新原本四家商品。':state.error||(state.status==='completed'?'行情更新完成':'行情可獨立手動更新');
+  if(state.running)marketPoll=setTimeout(loadMarketTrends,4000);
   $('marketUpdated').textContent=d.updated?'資料更新：'+new Date(d.updated).toLocaleString('zh-TW',{timeZone:'Asia/Taipei'})+'｜每日 12:00 更新（台灣時間）':'正在建立首日資料，請稍後重新開啟此頁籤';
   marketOptions();
  }catch(e){$('marketUpdated').textContent='行情資料暫時無法讀取：'+e.message}
+}
+async function refreshMarketManually(){
+ $('marketRefresh').disabled=true;
+ $('marketUpdateState').textContent='正在啟動獨立行情更新…';
+ try{
+  const r=await fetch('/api/market-trends/refresh',{method:'POST',headers:{'X-Watch-Monitor':'1'}});
+  const d=await r.json();if(!r.ok&&r.status!==409)throw Error(d.error||'啟動失敗');
+  await loadMarketTrends();
+ }catch(e){$('marketUpdateState').textContent=e.message;$('marketRefresh').disabled=false}
 }
 setInterval(()=>{if(document.visibilityState==='visible'&&!document.getElementById('marketPanel').hidden)loadMarketTrends()},60000);
