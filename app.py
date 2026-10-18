@@ -3,6 +3,7 @@ from datetime import datetime, timezone, date, timedelta
 from zoneinfo import ZoneInfo
 from functools import wraps
 from flask import Flask, request, jsonify, Response, send_file, session
+import comparison_reviews
 import dial_images
 import requests, psycopg
 import base64
@@ -200,10 +201,13 @@ def visual_bucket(row,evidence):
     return (result['bucket'],) if result['status']=='verified' else None
 
 def lower_price_with_images(rows):
-    with connect() as c:evidence=dial_images.load_evidence(c,rows)
-    return lower_price_items(rows,evidence)
+    with connect() as c:
+        evidence=dial_images.load_evidence(c,rows)
+        decisions=comparison_reviews.load_decisions(c)
+    return lower_price_items(rows,evidence,decisions)
 
-def lower_price_items(rows,image_evidence=None):
+def lower_price_items(rows,image_evidence=None,review_decisions=None):
+    if image_evidence is not None:return reviewed_low_prices(rows,image_evidence,review_decisions or {})
     baseline={};active=[]
     for row in rows:
         if row.get('missing_runs',0)>0 or row.get('status')=='possibly_removed' or not row.get('price') or row['price']<=0:continue
@@ -222,7 +226,8 @@ def lower_price_items(rows,image_evidence=None):
             matches.append({'brand':key[0],'model':model_of(row['title']),'dial_color':key[2],'year':key[3],'strap':key[4],'competitor':row,'baseline':own,'difference':difference,'difference_percent':round(100*difference/own['price'],1)})
     return {'baseline_models':len(baseline),'items':sorted(matches,key=lambda x:(-x['difference'],-x['difference_percent'],x['competitor']['url']))}
 
-def same_product_items(rows,image_evidence=None):
+def same_product_items(rows,image_evidence=None,review_decisions=None):
+    if image_evidence is not None:return reviewed_comparisons(rows,image_evidence,review_decisions or {})
     baseline={};competitors=[];grouped={}
     for row in rows:
         if row.get('missing_runs',0)>0 or row.get('status')=='possibly_removed' or not row.get('price') or row['price']<=0:continue
@@ -262,6 +267,74 @@ def same_product_items(rows,image_evidence=None):
         'groups':sorted(groups,key=lambda g:(-g['spread'],g['brand'],g['model'],g['dial_color']))}
 
 
+def reviewed_comparisons(rows,evidence,decisions):
+    raw=same_product_items(rows)
+    groups,items,pending,waiting=[],[],[],set()
+    review_items={}
+    for x in image_comparison_candidates(rows):
+        result=dial_images.assessment(x,item_dial_color(x),evidence)
+        if result['status']!='verified':
+            review_items[(x['site'],x['url'])]=dict(site=x['site'],url=x['url'],model=model_of(x['title']),image_url=x.get('image_url',''),reason=result['reason'])
+    for source in raw['groups']:
+        clocks=[x for x in source['listings'] if x['site']==BASELINE_SITE]
+        others=[x for x in source['listings'] if x['site']!=BASELINE_SITE]
+        if not clocks:continue
+        dial=source['dial_color'];states={}
+        def state(b,o):return states[(b['url'],o['site'],o['url'])][1]
+        for b in clocks:
+            for o in others:
+                value=comparison_reviews.pair_state(b,o,dial,model_of(b['title']),evidence,decisions)
+                states[(b['url'],o['site'],o['url'])]=value
+                key,choice,reason=value
+                if choice=='pending':pending.append(comparison_reviews.review_details(key,b,o,dial,model_of(b['title']),reason))
+                if choice=='analysing':waiting.add(key)
+                if choice not in ('automatic','approved'):continue
+                difference=b['price']-o['price']
+                items.append(dict(brand=source['brand'],model=model_of(o['title']),dial_color=dial,
+                    competitor=o,baseline=b,difference=difference,difference_percent=round(100*difference/b['price'],1),manual_review=choice=='approved'))
+        clusters=[]
+        for b in clocks:
+            matches=[o for o in others if state(b,o) in ('automatic','approved')]
+            if not matches:continue
+            cluster=[b]+matches
+            for i,previous in enumerate(clusters):
+                merged=list({(x['site'],x['url']):x for x in previous+cluster}.values())
+                if all(state(cb,co) in ('automatic','approved') for cb in merged if cb['site']==BASELINE_SITE for co in merged if co['site']!=BASELINE_SITE):
+                    clusters[i]=merged;break
+            else:clusters.append(cluster)
+        for listings in clusters:
+            listings=sorted(listings,key=lambda x:(x['price'],x['site'],x['url']))
+            minimum=listings[0]['price'];maximum=listings[-1]['price']
+            manual=sum(state(b,o)=='approved' for b in listings if b['site']==BASELINE_SITE for o in listings if o['site']!=BASELINE_SITE)
+            groups.append(dict(brand=source['brand'],model=source['model'],dial_color=dial,
+                store_count=len({x['site'] for x in listings}),listing_count=len(listings),minimum_price=minimum,
+                maximum_price=maximum,spread=maximum-minimum,manual_review_count=manual,
+                listings=[dict(x,difference_from_lowest=x['price']-minimum,difference_percent=round(100*(x['price']-minimum)/minimum,1)) for x in listings]))
+    return dict(baseline_models=raw['baseline_models'],image_checked=True,image_review=list(review_items.values()),
+        review_pairs=sorted(pending,key=lambda x:(x['model'],x['other']['site'],x['pair_key'])),image_pending_count=len(waiting),
+        items=sorted(items,key=lambda x:(-x['difference'],x['model'],x['competitor']['url'],x['baseline']['url'])),
+        groups=sorted(groups,key=lambda g:(-g['spread'],g['brand'],g['model'],g['dial_color'])))
+
+
+def reviewed_low_prices(rows,evidence,decisions):
+    baseline={};others=[]
+    for row in rows:
+        if row.get('missing_runs',0)>0 or row.get('status')=='possibly_removed' or not row.get('price') or row['price']<=0:continue
+        key=comparison_key(row)
+        if not key:continue
+        if row['site']==BASELINE_SITE:baseline.setdefault(key,[]).append(row)
+        else:others.append((key,row))
+    matches=[]
+    for key,row in others:
+        candidates=[b for b in baseline.get(key,[]) if comparison_reviews.pair_state(b,row,key[2],model_of(b['title']),evidence,decisions)[1] in ('automatic','approved')]
+        if not candidates:continue
+        own=min(candidates,key=lambda x:x['price'])
+        if row['price']>=own['price']:continue
+        difference=own['price']-row['price']
+        matches.append(dict(brand=key[0],model=model_of(row['title']),dial_color=key[2],year=key[3],strap=key[4],competitor=row,baseline=own,difference=difference,difference_percent=round(100*difference/own['price'],1)))
+    return dict(baseline_models=len(baseline),items=sorted(matches,key=lambda x:(-x['difference'],-x['difference_percent'],x['competitor']['url'])))
+
+
 def image_comparison_candidates(rows):
     # First narrow by source text; images never infer model, year or strap.
     groups=same_product_items(rows)['groups']
@@ -282,10 +355,16 @@ def analyse_current_dials(wait_for_crawl=False):
             logging.info('Dial image background check deferred while product crawler is active')
             return 0
     with connect() as c:
-        fields=['site','url','title','price','image_url','missing_runs','status']
-        rows=[dict(zip(fields,r)) for r in c.execute("SELECT site,url,title,price,image_url,missing_runs,status FROM watches WHERE price>0 AND missing_runs=0").fetchall()]
+        fields=['site','url','title','price','image_url','missing_runs','status','brand','model','year','condition']
+        rows=[dict(zip(fields,r)) for r in c.execute("SELECT site,url,title,price,image_url,missing_runs,status,brand,model,year,condition FROM watches WHERE price>0 AND missing_runs=0").fetchall()]
     count=dial_images.refresh_images(connect,image_comparison_candidates(rows))
-    logging.info('Dial images checked: %d',count)
+    with connect() as c:
+        evidence=dial_images.load_evidence(c,rows)
+        decisions=comparison_reviews.load_decisions(c)
+    result=same_product_items(rows,evidence,decisions)
+    comparison_reviews.sync_pending(connect,result['review_pairs'])
+    notifications=comparison_reviews.notify_pending(connect)
+    logging.info('Dial images checked: %d; review pairs: %d; review notifications sent: %d, failed: %d',count,len(result['review_pairs']),notifications['sent'],notifications['failed'])
     return count
 
 
@@ -551,8 +630,37 @@ def comparisons():
         records=c.execute('SELECT site,url,title,brand,model,year,condition,price,image_url,updated,status,missing_runs FROM watches WHERE price > 0 AND missing_runs=0').fetchall()
     fields=['site','url','title','brand','model','year','condition','price','image_url','updated','status','missing_runs']
     rows=[dict(zip(fields,[v.isoformat() if isinstance(v,datetime) else v for v in r])) for r in records]
-    with connect() as c:evidence=dial_images.load_evidence(c,rows)
-    return jsonify(same_product_items(rows,evidence))
+    with connect() as c:
+        evidence=dial_images.load_evidence(c,rows)
+        decisions=comparison_reviews.load_decisions(c)
+    return jsonify(same_product_items(rows,evidence,decisions))
+
+@app.get('/comparison-reviews.js')
+@protected
+def comparison_review_script():return send_file('comparison_reviews.js')
+
+@app.post('/api/comparison-review')
+@protected
+def decide_comparison():
+    if request.headers.get('X-Watch-Monitor')!='1':return jsonify(error='Missing request header'),403
+    body=request.get_json(silent=True)
+    if not isinstance(body,dict) or body.get('decision') not in ('approved','rejected'):return jsonify(error='請選擇需要比價或不需要'),400
+    if not all(isinstance(body.get(k),str) and len(body[k])<=4096 for k in ('pair_key','baseline_url','other_site','other_url')):return jsonify(error='比價組合資料不完整'),400
+    with connect() as c:
+        fields=['site','url','title','brand','model','year','condition','price','image_url']
+        records=c.execute("SELECT site,url,title,brand,model,year,condition,price,image_url FROM watches WHERE missing_runs=0 AND price>0 AND ((site=%s AND url=%s) OR (site=%s AND url=%s))",(BASELINE_SITE,body['baseline_url'],body['other_site'],body['other_url'])).fetchall()
+        rows=[dict(zip(fields,r)) for r in records]
+        b=next((x for x in rows if x['site']==BASELINE_SITE and x['url']==body['baseline_url']),None)
+        o=next((x for x in rows if x['site']==body['other_site'] and x['url']==body['other_url']),None)
+        if not b or not o or o['site']==BASELINE_SITE:return jsonify(error='商品已變更或無法比價，請重新整理'),409
+        raw=same_product_items(rows)
+        if not raw['groups'] or not raw['items']:return jsonify(error='型號或面盤文字已變更，請重新確認'),409
+        dial=item_dial_color(b);model=model_of(b['title']);evidence=dial_images.load_evidence(c,rows)
+        key=comparison_reviews.review_key(b,o,dial,model,evidence)
+        if key!=body['pair_key']:return jsonify(error='商品圖片或資料已變更，請重新確認'),409
+        details=comparison_reviews.review_details(key,b,o,dial,model,'使用者確認')
+        comparison_reviews.save_decision(c,details,body['decision'])
+    return jsonify(saved=True,decision=body['decision'])
 
 @app.get('/api/removals')
 @protected
