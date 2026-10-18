@@ -42,7 +42,8 @@ def install(app, connect, initial_version):
 
     def safe_post():
         return (request.headers.get('X-Watch-Monitor') == '1' and
-                (not request.headers.get('Origin') or request.headers['Origin'] == request.host_url.rstrip('/')))
+                (not request.headers.get('Origin') or request.headers['Origin'] in
+                 {request.host_url.rstrip('/'), 'https://' + request.host}))
 
     def verify(c, row, password, username=None):
         if row[4] and row[4] > datetime.now(timezone.utc):
