@@ -3,6 +3,7 @@ from datetime import datetime, timezone, date, timedelta
 from zoneinfo import ZoneInfo
 from functools import wraps
 from flask import Flask, request, jsonify, Response, send_file, session
+import dial_images
 import requests, psycopg
 import base64
 from pwa_assets import ICONS, SERVICE_WORKER
@@ -193,12 +194,23 @@ def comparison_key(item):
     if not all(attributes):return None
     return (brand,normalized)+attributes
 
-def lower_price_items(rows):
+def visual_bucket(row,evidence):
+    if evidence is None:return ()
+    result=dial_images.assessment(row,item_dial_color(row),evidence)
+    return (result['bucket'],) if result['status']=='verified' else None
+
+def lower_price_with_images(rows):
+    with connect() as c:evidence=dial_images.load_evidence(c,rows)
+    return lower_price_items(rows,evidence)
+
+def lower_price_items(rows,image_evidence=None):
     baseline={};active=[]
     for row in rows:
         if row.get('missing_runs',0)>0 or row.get('status')=='possibly_removed' or not row.get('price') or row['price']<=0:continue
         key=comparison_key(row)
-        if not key:continue
+        visual=visual_bucket(row,image_evidence)
+        if not key or visual is None:continue
+        key=key+visual
         if row['site']==BASELINE_SITE:
             if key not in baseline or row['price']<baseline[key]['price']:baseline[key]=row
         else:active.append((key,row))
@@ -210,7 +222,7 @@ def lower_price_items(rows):
             matches.append({'brand':key[0],'model':model_of(row['title']),'dial_color':key[2],'year':key[3],'strap':key[4],'competitor':row,'baseline':own,'difference':difference,'difference_percent':round(100*difference/own['price'],1)})
     return {'baseline_models':len(baseline),'items':sorted(matches,key=lambda x:(-x['difference'],-x['difference_percent'],x['competitor']['url']))}
 
-def same_product_items(rows):
+def same_product_items(rows,image_evidence=None):
     baseline={};competitors=[];grouped={}
     for row in rows:
         if row.get('missing_runs',0)>0 or row.get('status')=='possibly_removed' or not row.get('price') or row['price']<=0:continue
@@ -218,7 +230,9 @@ def same_product_items(rows):
         if brand=='其他' or not model or not dial:continue
         normalized=re.sub(r'[^A-Z0-9]','',model.upper())
         if brand=='Panerai':normalized='PAM'+str(int(normalized[3:]))
-        key=(brand,normalized,dial)
+        visual=visual_bucket(row,image_evidence)
+        if visual is None:continue
+        key=(brand,normalized,dial)+visual
         grouped.setdefault(key,[]).append(dict(row,strap=strap_of(row['title'])))
         if row['site']==BASELINE_SITE:baseline.setdefault(key,[]).append(row)
         else:competitors.append((key,row))
@@ -239,8 +253,31 @@ def same_product_items(rows):
             'store_count':len(sites),'listing_count':len(listings),'minimum_price':minimum,'maximum_price':maximum,
             'spread':maximum-minimum,'listings':[dict(x,difference_from_lowest=x['price']-minimum,
                 difference_percent=round(100*(x['price']-minimum)/minimum,1)) for x in listings]})
-    return {'baseline_models':len(baseline),'items':sorted(items,key=lambda x:(-x['difference'],x['model'],x['competitor']['url'],x['baseline']['url'])),
+    review=[]
+    if image_evidence is not None:
+        for x in image_comparison_candidates(rows):
+            check=dial_images.assessment(x,item_dial_color(x),image_evidence)
+            if check['status']!='verified':review.append(dict(site=x['site'],url=x['url'],model=model_of(x['title']),image_url=x.get('image_url',''),reason=check['reason']))
+    return {'image_review':review,'image_checked':image_evidence is not None,'baseline_models':len(baseline),'items':sorted(items,key=lambda x:(-x['difference'],x['model'],x['competitor']['url'],x['baseline']['url'])),
         'groups':sorted(groups,key=lambda g:(-g['spread'],g['brand'],g['model'],g['dial_color']))}
+
+
+def image_comparison_candidates(rows):
+    # First narrow by source text; images never infer model, year or strap.
+    groups=same_product_items(rows)['groups']
+    candidates={}
+    for g in groups:
+        if not any(x['site']==BASELINE_SITE for x in g['listings']):continue
+        for x in g['listings']:candidates[(x['site'],x['url'])]=x
+    return list(candidates.values())
+
+def analyse_current_dials():
+    with connect() as c:
+        fields=['site','url','title','price','image_url','missing_runs','status']
+        rows=[dict(zip(fields,r)) for r in c.execute("SELECT site,url,title,price,image_url,missing_runs,status FROM watches WHERE price>0 AND missing_runs=0").fetchall()]
+    count=dial_images.refresh_images(connect,image_comparison_candidates(rows))
+    logging.info('Dial images checked: %d',count)
+    return count
 
 
 def change_of(old,item):
@@ -424,9 +461,11 @@ def _crawl():
                     record_missing(c,site,run_started)
     with connect() as c:
         c.execute('UPDATE crawl_runs SET finished=now(),status=%s,count=%s,errors=%s WHERE id=%s',('partial' if errors else 'completed',total,'; '.join(errors),runid))
+    try:analyse_current_dials()
+    except Exception:logging.exception('Dial image checks incomplete; unverified products excluded from comparisons')
     if errors:raise RuntimeError('Crawl incomplete: '+'; '.join(errors))
     try:
-        result=push.notify_low_prices(connect,lower_price_items)
+        result=push.notify_low_prices(connect,lower_price_with_images)
         logging.info('Low-price notifications: %d sent, %d failed',result['sent'],result['failed'])
     except Exception:logging.warning('Low-price notification check failed; will retry after next complete crawl')
     try:
@@ -503,7 +542,8 @@ def comparisons():
         records=c.execute('SELECT site,url,title,brand,model,year,condition,price,image_url,updated,status,missing_runs FROM watches WHERE price > 0 AND missing_runs=0').fetchall()
     fields=['site','url','title','brand','model','year','condition','price','image_url','updated','status','missing_runs']
     rows=[dict(zip(fields,[v.isoformat() if isinstance(v,datetime) else v for v in r])) for r in records]
-    return jsonify(same_product_items(rows))
+    with connect() as c:evidence=dial_images.load_evidence(c,rows)
+    return jsonify(same_product_items(rows,evidence))
 
 @app.get('/api/removals')
 @protected
@@ -637,7 +677,10 @@ def manual():
 
 if __name__=='__main__':
     import sys
-    if len(sys.argv)>1 and sys.argv[1] in ('market','market-force'):
+    if len(sys.argv)>1 and sys.argv[1]=='analyze-dials':
+        try:analyse_current_dials()
+        except Exception:logging.exception('Dial image background check failed')
+    elif len(sys.argv)>1 and sys.argv[1] in ('market','market-force'):
         from market_trends import refresh_if_due
         try:refresh_if_due(connect,force=sys.argv[1]=='market-force',brand_slug=sys.argv[2] if len(sys.argv)>2 else None)
         except Exception:logging.exception('VIP Station update failed; retained previous snapshot')
@@ -651,3 +694,7 @@ if __name__=='__main__':
             if market_job:market_job.wait()
     elif len(sys.argv)>1 and sys.argv[1]=='init':init_db()
     else:app.run(host='0.0.0.0',port=int(os.getenv('PORT','10000')))
+
+# One background cache fill on web startup; advisory lock prevents duplicate workers.
+if __name__=='app' and os.environ.get('DATABASE_URL'):
+    subprocess.Popen([sys.executable,os.path.abspath(__file__),'analyze-dials'],cwd=app.root_path)
