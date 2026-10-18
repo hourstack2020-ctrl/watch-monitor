@@ -30,12 +30,29 @@ function marketChart(history){
   const points=history.map(p=>({...p,t:Date.parse(p.date+'T00:00:00Z')}));
   const min=Math.min(...points.map(p=>p.price)),max=Math.max(...points.map(p=>p.price)),pad=Math.max((max-min)*.15,max*.01,1);
   const first=points[0].t,last=points.at(-1).t;
-  const x=p=>last===first?174:54+(p.t-first)/(last-first)*246,y=p=>110-(p.price-min+pad)/(max-min+2*pad)*90;
+  const x=p=>last===first?12:12+(p.t-first)/(last-first)*296,y=p=>110-(p.price-min+pad)/(max-min+2*pad)*90;
   let paths=[],segment=[];
   for(const p of points){if(segment.length&&p.t-segment.at(-1).t>86400000){paths.push(segment);segment=[]}segment.push(p)}paths.push(segment);
   const line=paths.map(s=>`<polyline points="${s.map(p=>x(p)+','+y(p)).join(' ')}" fill="none" stroke="#315d86" stroke-width="2.5"/>`).join('');
-  return `<svg viewBox="0 0 320 150" role="img" aria-label="每日港幣售價走勢，共 ${points.length} 天"><line x1="54" y1="120" x2="300" y2="120" stroke="#d5dfeb"/><text x="0" y="24" font-size="10" fill="#687d93">${Math.round(max).toLocaleString('zh-HK')}</text><text x="0" y="112" font-size="10" fill="#687d93">${Math.round(min).toLocaleString('zh-HK')}</text>${line}${points.map(p=>`<circle cx="${x(p)}" cy="${y(p)}" r="3.5" fill="#315d86"><title>${esc(p.date)}：${marketHKD(p.price)}</title></circle>`).join('')}<text x="54" y="140" font-size="10" fill="#687d93">${esc(points[0].date)}</text><text x="300" y="140" text-anchor="end" font-size="10" fill="#687d93">${points.length>1?esc(points.at(-1).date):'開始累積'}</text></svg>`;
+  return `<div class="market-chart" style="position:relative"><svg viewBox="0 0 320 150" role="group" aria-label="每日港幣售價走勢，共 ${points.length} 天，點選資料點查看價格"><line x1="12" y1="120" x2="308" y2="120" stroke="#d5dfeb"/>${line}${points.map(p=>`<g role="button" tabindex="0" aria-label="${esc(p.date)}，查看價格" data-date="${esc(p.date)}" data-price="${p.price}" onclick="selectMarketPoint(event,this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();selectMarketPoint(event,this)}else if(event.key==='Escape'){hideMarketPrices()}" style="cursor:pointer"><circle cx="${x(p)}" cy="${y(p)}" r="12" fill="transparent"/><circle cx="${x(p)}" cy="${y(p)}" r="3.5" fill="#315d86" pointer-events="none"/></g>`).join('')}<text x="12" y="140" font-size="10" fill="#687d93">${esc(points[0].date)}</text><text x="308" y="140" text-anchor="end" font-size="10" fill="#687d93">${points.length>1?esc(points.at(-1).date):'開始累積'}</text></svg><output class="market-price-tip" hidden aria-live="polite" style="position:absolute;top:0;left:8px;max-width:calc(100% - 16px);box-sizing:border-box;padding:7px 10px;border-radius:8px;background:#172538;color:white;font-size:12px;pointer-events:none"></output></div>`;
 }
+function hideMarketPrices(){
+ document.querySelectorAll('.market-price-tip').forEach(tip=>{tip.hidden=true});
+ document.querySelectorAll('.market-chart [aria-pressed]').forEach(point=>point.removeAttribute('aria-pressed'));
+}
+function selectMarketPoint(event,point){
+ event.stopPropagation();
+ const selected=point.getAttribute('aria-pressed')==='true';
+ hideMarketPrices();
+ if(selected)return;
+ const tip=point.closest('.market-chart').querySelector('.market-price-tip');
+ tip.textContent=point.dataset.date+' · '+marketHKD(point.dataset.price);
+ tip.hidden=false;
+ point.setAttribute('aria-pressed','true');
+}
+document.addEventListener('click',hideMarketPrices);
+document.addEventListener('keydown',event=>{if(event.key==='Escape')hideMarketPrices()});
+
 function marketOptions(reset=true){
  const brand=$('marketBrand').value,old=$('marketSeries').value;
  const menus=(marketData.source_menu?.menus||[]).filter(x=>!brand||x.brand===brand);
