@@ -605,15 +605,22 @@ def manual():
     with connect() as c:
         running=c.execute("SELECT 1 FROM pg_locks WHERE locktype='advisory' AND objid=68234016 AND granted").fetchone()
     if running:return jsonify({'error':'更新已在執行中'}),409
-    subprocess.Popen([sys.executable,os.path.abspath(__file__),'crawl'],cwd=app.root_path)
+    subprocess.Popen([sys.executable,os.path.abspath(__file__),'crawl-products'],cwd=app.root_path)
     return jsonify({'started':True}),202
 
 if __name__=='__main__':
     import sys
-    if len(sys.argv)>1 and sys.argv[1] in ('crawl','market'):
+    if len(sys.argv)>1 and sys.argv[1] in ('market','market-force'):
         from market_trends import refresh_if_due
-        try:refresh_if_due(connect)
-        except Exception:logging.exception('VIP Station daily market update failed; retained previous complete snapshot')
-        if sys.argv[1]=='crawl':print('Extracted rows:',crawl())
+        try:refresh_if_due(connect,force=sys.argv[1]=='market-force')
+        except Exception:logging.exception('VIP Station update failed; retained previous snapshot')
+    elif len(sys.argv)>1 and sys.argv[1] in ('crawl','crawl-products'):
+        market_job=None
+        # Scheduled noon work runs separately; the product button never starts it.
+        if sys.argv[1]=='crawl' and datetime.now(ZoneInfo('Asia/Taipei')).hour==12:
+            market_job=subprocess.Popen([sys.executable,os.path.abspath(__file__),'market'],cwd=app.root_path)
+        try:print('Extracted rows:',crawl())
+        finally:
+            if market_job:market_job.wait()
     elif len(sys.argv)>1 and sys.argv[1]=='init':init_db()
     else:app.run(host='0.0.0.0',port=int(os.getenv('PORT','10000')))
