@@ -25,10 +25,16 @@ class ComparisonReviews(unittest.TestCase):
         self.assertEqual(self.key,reviews.review_key(dict(self.b,price=300),self.o,'綠','126000',self.e))
         e=dict(self.e);e['other.jpg']=dict(e['other.jpg'],sha256='changed')
         self.assertNotEqual(self.key,reviews.review_key(self.b,self.o,'綠','126000',e))
-    def test_changed_picture_requires_new_confirmation_even_if_verified(self):
+    def test_changed_picture_matching_conditions_needs_no_confirmation(self):
         e={x:{'status':'analysed','family':'green','tone':'light','sha256':'new-'+x} for x in ['clock.jpg','other.jpg']}
         decisions={self.key:'rejected',reviews.listing_pair_id(self.b,self.o):self.key}
-        self.assertEqual(reviews.pair_state(self.b,self.o,'綠','126000',e,decisions)[1],'pending')
+        self.assertEqual(reviews.pair_state(self.b,self.o,'綠','126000',e,decisions)[1],'automatic')
+    def test_clear_matching_text_does_not_require_image_confirmation(self):
+        for evidence in ({},self.e):
+            self.assertEqual(reviews.pair_state(self.b,self.o,'開心果綠','126000',evidence,{})[1],'automatic')
+    def test_conflicting_image_still_requires_confirmation(self):
+        evidence={x:{'status':'analysed','family':'blue','tone':'light'} for x in ['clock.jpg','other.jpg']}
+        self.assertEqual(reviews.pair_state(self.b,self.o,'開心果綠','126000',evidence,{})[1],'pending')
     def test_decision_endpoint_saves_only_current_pair(self):
         fields=('site','url','title','brand','model','year','condition','price','image_url')
         writes=[]
