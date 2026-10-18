@@ -87,9 +87,13 @@ def model_of(t):
 def dial_color_of(title):
     # Only explicit dial descriptions; never infer from bezel, strap or nickname.
     if re.search(r'(?:銀灰|灰銀)(?:色)?(?:太陽放射紋|太陽紋|放射紋)?(?:面盤|錶盤|錶面|面)',title):return ''
-    colors=r'煙燻綠|煙燻藍|煙燻灰|天藍|蒂芙尼藍|TIFFANY藍|冰藍|淺藍|深藍|亮藍|海軍藍|午夜藍|薄荷綠|橄欖綠|墨綠|深綠|淺綠|綠松石|香檳金|香檳|玫瑰金|巧克力|咖啡|棕|褐|黑|白|銀|金|灰|藍|綠|紅|粉紅|粉|紫|黃|橘|橙'
+    colors=r'開心果綠|牛油果綠|煙燻綠|煙燻藍|煙燻灰|天藍|蒂芙尼藍|TIFFANY藍|冰藍|淺藍|深藍|亮藍|海軍藍|午夜藍|薄荷綠|橄欖綠|墨綠|深綠|淺綠|綠松石|香檳金|香檳|玫瑰金|巧克力|咖啡|棕|褐|黑|白|銀|金|灰|藍|綠|紅|粉紅|粉|紫|黃|橘|橙'
     pattern=r'('+colors+r')(?:色)?(?:太陽放射紋|太陽紋|放射紋|波紋|條紋|巴黎釘紋|旭日紋|格紋|鏤空|漆|珍珠母貝|貝殼)?(?:面盤|錶盤|錶面|面)(?!盤?時標|框|圈)'
     found={m.group(1) for m in re.finditer(pattern,title)}
+    # OP 36 listings also explicitly name the pistachio dial without a dial suffix.
+    if not found and model_of(title)=='126000' and re.search(r'OYSTER\s*PERPETUAL|蠔式[恆恒]動',title,re.I):
+        found.update(re.findall(r'(開心果綠|牛油果綠)(?:色)?',title))
+    found={'開心果綠' if x=='牛油果綠' else x for x in found}
     # Distinct special dials must not collapse into a plain base color.
     if re.search(r'熊貓|漸層|漸藍|雙色|多色|彩色|滿天星|袖扣|項鍊|錶盒',title):return ''
     if re.search(r'漸變(?!煙燻)',title):return ''
@@ -162,6 +166,9 @@ def item_dial_color(item):
     title=item.get('title') or ''
     parsed=urllib.parse.urlsplit(item.get('url') or '')
     listing_id=urllib.parse.parse_qs(parsed.query).get('ID',[''])[0]
+    # Exact listing colour verified from the user's photo; leave source text untouched.
+    if (item.get('site'),parsed.hostname,listing_id)==('鐘點站','www.hourstack.com.tw','18767') and parsed.path.lower()=='/product_open.asp' and model_of(title)=='126000' and '126000 綠色面盤' in title:
+        return dial_color_of(title.replace('126000 綠色面盤','126000 深綠色面盤',1))
     confirmed=CONFIRMED_DIAL_COLORS.get((item.get('site'),parsed.hostname,listing_id))
     if confirmed and parsed.path.lower()=='/product_open.asp' and model_of(title)=='126334' and '銀灰色面盤' in title:
         return dial_color_of(title.replace('銀灰色面盤',confirmed+'色面盤',1))
