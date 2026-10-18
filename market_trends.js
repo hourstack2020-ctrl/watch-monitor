@@ -69,13 +69,29 @@ function updateMarketButton(){
  const selected=$('marketBrand').value,stamp=marketData?.brand_updates?.[selected]?.updated||marketData?.updated;
  $('marketUpdated').textContent=stamp?'資料更新：'+new Date(stamp).toLocaleString('zh-TW',{timeZone:'Asia/Taipei'})+'｜各品牌獨立發布，每日 12:00 更新':'尚未取得此品牌行情資料';
 }
+function marketLatestInfo(item){
+ // Reading an unchanged quote again does not count as new information.
+ const history=[...(item.history||[])].sort((a,b)=>a.date.localeCompare(b.date));
+ let latest=history[0]?.date||item.date||'';
+ for(let i=1;i<history.length;i++){
+  if(Number(history[i].price)!==Number(history[i-1].price))latest=history[i].date;
+ }
+ if(item.previous_price!=null&&Number(item.price)!==Number(item.previous_price))latest=item.date||latest;
+ return Date.parse(latest+'T00:00:00Z')||0;
+}
+function compareMarketInfo(a,b,order){
+ return marketLatestInfo(b)-marketLatestInfo(a)
+  ||order.indexOf(a.brand)-order.indexOf(b.brand)
+  ||(a.series==='Nautilus'?0:1)-(b.series==='Nautilus'?0:1)
+  ||a.series.localeCompare(b.series)||a.model.localeCompare(b.model)||a.source_id.localeCompare(b.source_id);
+}
 function renderMarketTrends(reset=true){
  if(reset)marketLimit=20;
  if(!marketData)return;
  const brand=$('marketBrand').value,series=$('marketSeries').value,q=$('marketSearch').value.trim().toLowerCase(),days=Number($('marketDays').value);
  const order=marketData.brands;
  let rows=marketData.items.filter(x=>marketSeriesAllowed(x.brand,x.series)&&(!brand||x.brand===brand)&&(!series||x.series===series)&&(!q||[x.title,x.model,x.series].join(' ').toLowerCase().includes(q)));
- rows.sort((a,b)=>order.indexOf(a.brand)-order.indexOf(b.brand)||(a.series==='Nautilus'?0:1)-(b.series==='Nautilus'?0:1)||a.series.localeCompare(b.series)||a.model.localeCompare(b.model)||a.source_id.localeCompare(b.source_id));
+ rows.sort((a,b)=>compareMarketInfo(a,b,order));
  $('marketCount').textContent=rows.length+' 件';
  const cutoff=Date.parse((marketData.date||'2000-01-01')+'T00:00:00Z')-(days-1)*86400000;
  let heading='';
