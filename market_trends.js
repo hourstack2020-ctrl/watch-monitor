@@ -1,3 +1,23 @@
+const marketVisibleSeries={
+  "Patek Philippe 百達翡麗": [
+    "Aquanaut",
+    "Calatrava",
+    "Nautilus",
+    "Twenty-4",
+    "周年紀念系列",
+    "周年紀念系列 Anniversary Series",
+    "時計系列 Cubitus",
+    "超級複雜功能時計系列 Grand Complications",
+    "複雜功能時計系列 Complications"
+  ],
+  "Audemars Piguet 愛彼": [
+    "Royal Oak Concept 皇家橡樹概念系列",
+    "Royal Oak 皇家橡樹系列",
+    "皇家橡樹系列 Royal Oak",
+    "皇家橡樹概念系列 Royal Oak Concept"
+  ]
+};
+function marketSeriesAllowed(brand,series){return !marketVisibleSeries[brand]||marketVisibleSeries[brand].includes(series)}
 let marketData=null,marketPoll=null,marketLimit=20;
 const marketHKD=value=>'HK$ '+Number(value).toLocaleString('zh-HK');
 function marketChart(history){
@@ -14,7 +34,7 @@ function marketChart(history){
 function marketOptions(reset=true){
  const brand=$('marketBrand').value,old=$('marketSeries').value;
  const menus=(marketData.source_menu?.menus||[]).filter(x=>!brand||x.brand===brand);
- const series=[...new Set(menus.flatMap(x=>x.series||[]))];
+ const series=[...new Set(menus.flatMap(x=>(x.series||[]).filter(s=>marketSeriesAllowed(x.brand,s))))];
  $('marketSeries').innerHTML='<option value="">全部系列</option>'+series.map(s=>`<option>${esc(s)}</option>`).join('');
  $('marketSeries').value=series.includes(old)?old:'';
  renderMarketTrends(reset);
@@ -24,7 +44,7 @@ function renderMarketTrends(reset=true){
  if(!marketData)return;
  const brand=$('marketBrand').value,series=$('marketSeries').value,q=$('marketSearch').value.trim().toLowerCase(),days=Number($('marketDays').value);
  const order=marketData.brands;
- let rows=marketData.items.filter(x=>(!brand||x.brand===brand)&&(!series||x.series===series)&&(!q||[x.title,x.model,x.series].join(' ').toLowerCase().includes(q)));
+ let rows=marketData.items.filter(x=>marketSeriesAllowed(x.brand,x.series)&&(!brand||x.brand===brand)&&(!series||x.series===series)&&(!q||[x.title,x.model,x.series].join(' ').toLowerCase().includes(q)));
  rows.sort((a,b)=>order.indexOf(a.brand)-order.indexOf(b.brand)||(a.series==='Nautilus'?0:1)-(b.series==='Nautilus'?0:1)||a.series.localeCompare(b.series)||a.model.localeCompare(b.model)||a.source_id.localeCompare(b.source_id));
  $('marketCount').textContent=rows.length+' 件';
  const cutoff=Date.parse((marketData.date||'2000-01-01')+'T00:00:00Z')-(days-1)*86400000;
