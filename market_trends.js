@@ -12,14 +12,11 @@ function marketChart(history){
   return `<svg viewBox="0 0 320 150" role="img" aria-label="每日港幣售價走勢，共 ${points.length} 天"><line x1="54" y1="120" x2="300" y2="120" stroke="#d5dfeb"/><text x="0" y="24" font-size="10" fill="#687d93">${Math.round(max).toLocaleString('zh-HK')}</text><text x="0" y="112" font-size="10" fill="#687d93">${Math.round(min).toLocaleString('zh-HK')}</text>${line}${points.map(p=>`<circle cx="${x(p)}" cy="${y(p)}" r="3.5" fill="#315d86"><title>${esc(p.date)}：${marketHKD(p.price)}</title></circle>`).join('')}<text x="54" y="140" font-size="10" fill="#687d93">${esc(points[0].date)}</text><text x="300" y="140" text-anchor="end" font-size="10" fill="#687d93">${points.length>1?esc(points.at(-1).date):'開始累積'}</text></svg>`;
 }
 function marketOptions(reset=true){
- const brand=$('marketBrand').value,old=$('marketSeries').value,oldPrice=$('marketPrice').value;
+ const brand=$('marketBrand').value,old=$('marketSeries').value;
  const menus=(marketData.source_menu?.menus||[]).filter(x=>!brand||x.brand===brand);
  const series=[...new Set(menus.flatMap(x=>x.series||[]))];
  $('marketSeries').innerHTML='<option value="">全部系列</option>'+series.map(s=>`<option>${esc(s)}</option>`).join('');
  $('marketSeries').value=series.includes(old)?old:'';
- const prices=[...new Set(menus.flatMap(x=>x.price_ranges||[]))];
- $('marketPrice').innerHTML='<option value="">價格(HKD)：全部</option>'+prices.map(s=>`<option value="${esc(s)}">HK$ ${esc(s)}</option>`).join('');
- $('marketPrice').value=prices.includes(oldPrice)?oldPrice:'';
  renderMarketTrends(reset);
 }
 function renderMarketTrends(reset=true){
@@ -27,9 +24,7 @@ function renderMarketTrends(reset=true){
  if(!marketData)return;
  const brand=$('marketBrand').value,series=$('marketSeries').value,q=$('marketSearch').value.trim().toLowerCase(),days=Number($('marketDays').value);
  const order=marketData.brands;
- const range=$('marketPrice').value.match(/([0-9]+)\s*-\s*([0-9]+)/);
- const priceOK=x=>!range||(x.price>=Number(range[1])&&x.price<=Number(range[2]));
- let rows=marketData.items.filter(x=>priceOK(x)&&(!brand||x.brand===brand)&&(!series||x.series===series)&&(!q||[x.title,x.model,x.series].join(' ').toLowerCase().includes(q)));
+ let rows=marketData.items.filter(x=>(!brand||x.brand===brand)&&(!series||x.series===series)&&(!q||[x.title,x.model,x.series].join(' ').toLowerCase().includes(q)));
  rows.sort((a,b)=>order.indexOf(a.brand)-order.indexOf(b.brand)||(a.series==='Nautilus'?0:1)-(b.series==='Nautilus'?0:1)||a.series.localeCompare(b.series)||a.model.localeCompare(b.model)||a.source_id.localeCompare(b.source_id));
  $('marketCount').textContent=rows.length+' 件';
  const cutoff=Date.parse((marketData.date||'2000-01-01')+'T00:00:00Z')-(days-1)*86400000;
