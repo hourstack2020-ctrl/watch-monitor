@@ -1,3 +1,8 @@
+async function marketResponse(r){
+ let d;try{d=await r.json()}catch(e){throw Error('行情服務暫時異常（HTTP '+r.status+'），請稍後重試')}
+ if(!r.ok&&r.status!==409)throw Error(d.error||'行情服務暫時異常（HTTP '+r.status+'）');
+ return d;
+}
 const marketVisibleSeries={
   "Patek Philippe 百達翡麗": [
     "Aquanaut",
@@ -72,7 +77,7 @@ async function loadMarketTrends(){
  clearTimeout(marketPoll);
  $('marketUpdated').textContent='讀取行情資料…';
  try{
-  const r=await fetch('/api/market-trends');const d=await r.json();if(!r.ok)throw Error(d.error||'讀取失敗');marketData=d;
+  const r=await fetch('/api/market-trends');const d=await marketResponse(r);marketData=d;
   const selected=$('marketBrand').value;
   $('marketBrand').innerHTML='<option value="">全部品牌</option>'+d.brands.map(b=>`<option>${esc(b)}</option>`).join('');
   $('marketBrand').value=d.brands.includes(selected)?selected:'';
@@ -83,7 +88,7 @@ async function loadMarketTrends(){
   if(state.running)marketPoll=setTimeout(loadMarketTrends,4000);
   $('marketUpdated').textContent=d.updated?'資料更新：'+new Date(d.updated).toLocaleString('zh-TW',{timeZone:'Asia/Taipei'})+'｜每日 12:00 更新（台灣時間）':'正在建立首日資料，請稍後重新開啟此頁籤';
   marketOptions(false);
- }catch(e){$('marketUpdated').textContent='行情資料暫時無法讀取：'+e.message}
+ }catch(e){$('marketUpdated').textContent=e.message;$('marketUpdateState').textContent='尚未確認更新狀態，請稍後重試';$('marketRefresh').disabled=false;$('marketRefresh').textContent=$('marketBrand').value?'更新所選品牌':'更新全部品牌';marketPoll=setTimeout(loadMarketTrends,15000)}
 }
 async function refreshMarketManually(){
  $('marketRefresh').disabled=true;
@@ -92,7 +97,7 @@ async function refreshMarketManually(){
   const slugs={'Patek Philippe 百達翡麗':'patek-philippe','Rolex 勞力士':'rolex','Richard Mille 理查德米勒':'richard-mille','Audemars Piguet 愛彼':'audemars-piguet'};
   const brand=slugs[$('marketBrand').value];
   const r=await fetch('/api/market-trends/refresh',{method:'POST',headers:{'X-Watch-Monitor':'1','Content-Type':'application/json'},body:JSON.stringify(brand?{brand}:{})});
-  const d=await r.json();if(!r.ok&&r.status!==409)throw Error(d.error||'啟動失敗');
+  const d=await marketResponse(r);
   await loadMarketTrends();
  }catch(e){$('marketUpdateState').textContent=e.message;$('marketRefresh').disabled=false}
 }
