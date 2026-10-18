@@ -17,6 +17,12 @@ from flask import jsonify, request
 SOURCE = 'https://www.vipstation.com.hk/tc/watches'
 BRANDS = {'PP':'Patek Philippe 百達翡麗','ROLEX':'Rolex 勞力士','RICHARD MILLE':'Richard Mille 理查德米勒','AP':'Audemars Piguet 愛彼'}
 TZ = ZoneInfo('Asia/Taipei')
+BRAND_SLUGS = dict(zip(('patek-philippe','rolex','richard-mille','audemars-piguet'), BRANDS.values()))
+VISIBLE_SERIES = {
+    'Patek Philippe 百達翡麗': {'Aquanaut','Calatrava','Nautilus','Twenty-4','周年紀念系列','周年紀念系列 Anniversary Series','時計系列 Cubitus','超級複雜功能時計系列 Grand Complications','複雜功能時計系列 Complications'},
+    'Audemars Piguet 愛彼': {'Royal Oak Concept 皇家橡樹概念系列','Royal Oak 皇家橡樹系列','皇家橡樹系列 Royal Oak','皇家橡樹概念系列 Royal Oak Concept'},
+}
+
 
 
 def variable(html, name):
@@ -69,9 +75,10 @@ def model_from_catalog(item):
     matches=[x.strip() for x in candidates if re.search(r'\d',x) and code.startswith(re.sub('[^A-Z0-9]','',x.upper()))]
     return max(matches,key=len) if matches else None
 
-def fetch_catalog(progress=lambda value:None):
+def fetch_catalog(progress=lambda value:None, brand_slug=None):
     products, seen_source, menus = {}, set(), []
-    slugs = ['patek-philippe','rolex','richard-mille','audemars-piguet']
+    if brand_slug not in BRAND_SLUGS:raise ValueError('請選取有效品牌')
+    slugs = [brand_slug]
     page_count = 0
     def get(client, url, params=None):
         for attempt in range(3):
@@ -90,10 +97,13 @@ def fetch_catalog(progress=lambda value:None):
             base='https://www.vipstation.com.hk/tc/watches/'+slug
             first=get(client,base)
             dept=variable(first,'deptList')
-            if dept.get('ST_TITLE') not in BRANDS.values():raise ValueError('來源品牌分類不符')
+            if dept.get('ST_TITLE') != BRAND_SLUGS[slug]:raise ValueError('來源品牌分類不符')
             brand=dept['ST_TITLE']
             options=variable(first,'otherList')
             series=next((x['LT_VALUES'] for x in options if x['ST_CODE']=='st_series'),[])
+            if brand in VISIBLE_SERIES:
+                series=[x for x in series if x in VISIBLE_SERIES[brand]]
+                if not series:raise ValueError('來源缺少指定系列')
             prices=next((x['LT_VALUES'] for x in options if x['ST_CODE']=='no_price'),[])
             menus.append(dict(brand=brand,source_url=base,series=series,price_ranges=prices))
             # Each series query is the source's own classification, never inferred from titles.
@@ -125,46 +135,63 @@ def fetch_catalog(progress=lambda value:None):
                         product=normalize(item,detail)
                         # A product appearing under multiple source labels remains one listing.
                         products.setdefault(code,product)
-    if not products:raise ValueError('四品牌沒有可核對的公開港幣報價，保留上次資料')
+    if not products:raise ValueError('此品牌沒有可核對的公開港幣報價，保留上次資料')
     return list(products.values()),page_count,len(seen_source),{'category':'手錶','menus':menus}
 
 
-def refresh_if_due(connect, force=False):
+def save_brand_snapshot(connect, slug, products, pages, total, metadata, checked):
+    # Products, prices and the active pointer commit together for this brand only.
+    with connect() as c:
+        with c.cursor() as cur:
+            cur.executemany("""INSERT INTO market_trend_products(source_id,variant_key,brand,series,model,title,image_url,url)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(source_id,variant_key) DO UPDATE SET
+                brand=EXCLUDED.brand,series=EXCLUDED.series,model=EXCLUDED.model,title=EXCLUDED.title,image_url=EXCLUDED.image_url,url=EXCLUDED.url""",
+                [tuple(p[k] for k in ('source_id','variant_key','brand','series','model','title','image_url','url')) for p in products])
+            cur.executemany("""INSERT INTO market_trend_prices(source_id,variant_key,observed_date,price,checked_at)
+                VALUES(%s,%s,%s,%s,%s) ON CONFLICT(source_id,variant_key,observed_date) DO UPDATE
+                SET price=EXCLUDED.price,checked_at=EXCLUDED.checked_at""",
+                [(p['source_id'],p['variant_key'],checked.date(),p['price'],checked) for p in products])
+        c.execute("""INSERT INTO market_brand_snapshots(brand,observed_date,checked_at,count,pages,source_count,metadata)
+            VALUES(%s,%s,%s,%s,%s,%s,%s::jsonb) ON CONFLICT(brand) DO UPDATE SET
+            observed_date=EXCLUDED.observed_date,checked_at=EXCLUDED.checked_at,count=EXCLUDED.count,
+            pages=EXCLUDED.pages,source_count=EXCLUDED.source_count,metadata=EXCLUDED.metadata""",
+            (BRAND_SLUGS[slug],checked.date(),checked,len(products),pages,total,json.dumps(metadata,ensure_ascii=False)))
+
+
+def refresh_if_due(connect, force=False, brand_slug=None):
+    if brand_slug is not None and brand_slug not in BRAND_SLUGS:raise ValueError('請選取有效品牌')
     now = datetime.now(TZ)
     with connect() as lock:
-        if not lock.execute('SELECT pg_try_advisory_lock(68234017)').fetchone()[0]:
-            return False
+        if not lock.execute('SELECT pg_try_advisory_lock(68234017)').fetchone()[0]:return False
         try:
-            last = lock.execute("SELECT checked_at FROM market_trend_runs WHERE status='completed' ORDER BY checked_at DESC LIMIT 1").fetchone()
-            # Bootstrap once; thereafter the existing noon cron is the only daily trigger.
-            if not force and last and (now.hour != 12 or last[0].astimezone(TZ) >= now.replace(hour=12,minute=0,second=0,microsecond=0)):
-                return False
+            targets=[]
+            for slug in ([brand_slug] if brand_slug else BRAND_SLUGS):
+                last=lock.execute('SELECT checked_at FROM market_brand_snapshots WHERE brand=%s',(BRAND_SLUGS[slug],)).fetchone()
+                if not force and last and (now.hour != 12 or last[0].astimezone(TZ) >= now.replace(hour=12,minute=0,second=0,microsecond=0)):continue
+                targets.append(slug)
+            if not targets:return False
             with connect() as c:
-                c.execute("INSERT INTO market_update_state(singleton,status,started,error) VALUES(true,'running',now(),'') ON CONFLICT(singleton) DO UPDATE SET status='running',started=now(),finished=NULL,error=''")
+                c.execute("INSERT INTO market_update_state(singleton,status,started,error,progress) VALUES(true,'running',now(),'','') ON CONFLICT(singleton) DO UPDATE SET status='running',started=now(),finished=NULL,error='',progress=''")
+            succeeded,failed=[],[]
             def progress(value):
                 with connect() as c:c.execute('UPDATE market_update_state SET progress=%s WHERE singleton=true',(value,))
-            products, pages, total, metadata = fetch_catalog(progress)
-            checked = datetime.now(TZ)
+            for slug in targets:
+                try:
+                    progress(BRAND_SLUGS[slug]+'｜開始獨立更新')
+                    products,pages,total,metadata=fetch_catalog(progress,slug)
+                    save_brand_snapshot(connect,slug,products,pages,total,metadata,datetime.now(TZ))
+                    succeeded.append(BRAND_SLUGS[slug])
+                    progress(BRAND_SLUGS[slug]+'｜更新完成，已發布 '+str(len(products))+' 筆報價')
+                except Exception:
+                    logging.exception('VIP Station brand update failed: %s; retained this brand snapshot',slug)
+                    failed.append(BRAND_SLUGS[slug])
+                    # Continue other brands; a failed brand never rolls back another brand.
+            status='partial' if succeeded and failed else 'failed' if failed else 'completed'
+            error=('更新失敗，保留舊資料：'+'、'.join(failed)) if failed else ''
+            summary='已完成 '+str(len(succeeded))+' 個品牌'+('；失敗 '+str(len(failed))+' 個品牌' if failed else '')
             with connect() as c:
-                with c.cursor() as cur:
-                    cur.executemany('''INSERT INTO market_trend_products(source_id,variant_key,brand,series,model,title,image_url,url)
-                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(source_id,variant_key) DO UPDATE SET
-                        brand=EXCLUDED.brand,series=EXCLUDED.series,model=EXCLUDED.model,title=EXCLUDED.title,image_url=EXCLUDED.image_url,url=EXCLUDED.url''',
-                        [tuple(p[k] for k in ('source_id','variant_key','brand','series','model','title','image_url','url')) for p in products])
-                    cur.executemany('''INSERT INTO market_trend_prices(source_id,variant_key,observed_date,price,checked_at)
-                        VALUES(%s,%s,%s,%s,%s) ON CONFLICT(source_id,variant_key,observed_date) DO UPDATE
-                        SET price=EXCLUDED.price,checked_at=EXCLUDED.checked_at''',
-                        [(p['source_id'],p['variant_key'],now.date(),p['price'],checked) for p in products])
-                c.execute("""INSERT INTO market_trend_runs(observed_date,checked_at,status,count,pages,source_count,error,metadata)
-                    VALUES(%s,%s,'completed',%s,%s,%s,'',%s::jsonb) ON CONFLICT(observed_date) DO UPDATE
-                    SET checked_at=EXCLUDED.checked_at,status='completed',count=EXCLUDED.count,pages=EXCLUDED.pages,source_count=EXCLUDED.source_count,error='',metadata=EXCLUDED.metadata""",
-                    (now.date(),checked,len(products),pages,total,json.dumps(metadata,ensure_ascii=False)))
-                c.execute("UPDATE market_update_state SET status='completed',finished=now(),error='' WHERE singleton=true")
-            return True
-        except Exception:
-            with connect() as c:
-                c.execute("UPDATE market_update_state SET status='failed',finished=now(),error='來源更新失敗，已保留上次完整資料，請稍後重試' WHERE singleton=true")
-            raise
+                c.execute("UPDATE market_update_state SET status=%s,finished=now(),error=%s,progress=%s WHERE singleton=true",(status,error,summary))
+            return bool(succeeded)
         finally:
             lock.execute('SELECT pg_advisory_unlock(68234017)')
 
@@ -174,39 +201,55 @@ def install(app, connect, protected):
     @protected
     def trends():
         with connect() as c:
-            state = c.execute("SELECT status,started,finished,error,progress FROM market_update_state WHERE singleton=true").fetchone()
+            state=c.execute("SELECT status,started,finished,error,progress FROM market_update_state WHERE singleton=true").fetchone()
             locked=c.execute("SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND objid=68234017 AND granted)").fetchone()[0]
-            running = bool(locked or (state and state[0]=='pending' and state[1] > datetime.now(TZ)-timedelta(minutes=2)))
-            update_state = {'running':running,'status':state[0] if state else 'idle','error':state[3] if state else '', 'progress':state[4] if state else ''}
-            last = c.execute("SELECT observed_date,checked_at,count,metadata FROM market_trend_runs WHERE status='completed' ORDER BY checked_at DESC LIMIT 1").fetchone()
-            if not last:
-                return jsonify(items=[], brands=list(BRANDS.values()), updated=None, source=SOURCE, update_state=update_state)
-            rows = c.execute('''SELECT p.source_id,p.variant_key,p.brand,p.series,p.model,p.title,p.image_url,p.url,
-                h.price,prev.price,(SELECT jsonb_agg(jsonb_build_object('date',d.observed_date,'price',d.price) ORDER BY d.observed_date)
-                FROM market_trend_prices d WHERE d.source_id=p.source_id AND d.variant_key=p.variant_key AND d.observed_date >= %s)
-                FROM market_trend_products p JOIN market_trend_prices h USING(source_id,variant_key)
-                LEFT JOIN market_trend_prices prev ON prev.source_id=h.source_id AND prev.variant_key=h.variant_key
-                AND prev.observed_date=h.observed_date-1 WHERE h.observed_date=%s AND h.checked_at=%s ORDER BY p.brand,p.series,p.model,p.source_id''',
-                (last[0]-timedelta(days=365),last[0],last[1])).fetchall()
-        fields=['source_id','variant_key','brand','series','model','title','image_url','url','price','previous_price','history']
-        return jsonify(items=[dict(zip(fields,r)) for r in rows],brands=list(BRANDS.values()),
-                       updated=last[1].isoformat(),date=last[0].isoformat(),source=SOURCE,update_state=update_state,source_menu=last[3] if last else {})
+            running=bool(locked or (state and state[0]=='pending' and state[1]>datetime.now(TZ)-timedelta(minutes=2)))
+            update_state={'running':running,'status':state[0] if state else 'idle','error':state[3] if state else '', 'progress':state[4] if state else ''}
+            legacy=c.execute("SELECT observed_date,checked_at,count,metadata FROM market_trend_runs WHERE status='completed' ORDER BY checked_at DESC LIMIT 1").fetchone()
+            snapshots={r[0]:r[1:] for r in c.execute('SELECT brand,observed_date,checked_at,count,metadata FROM market_brand_snapshots').fetchall()}
+            rows,menus,updates=[],[],{}
+            for brand in BRANDS.values():
+                last=snapshots.get(brand) or legacy
+                if not last:continue
+                observed,checked,count,metadata=last
+                menus.extend(x for x in (metadata or {}).get('menus',[]) if x['brand']==brand)
+                updates[brand]={'date':observed.isoformat(),'updated':checked.isoformat(),'count':count}
+                rows.extend(c.execute("""SELECT p.source_id,p.variant_key,p.brand,p.series,p.model,p.title,p.image_url,p.url,
+                    h.price,prev.price,(SELECT jsonb_agg(jsonb_build_object('date',d.observed_date,'price',d.price) ORDER BY d.observed_date)
+                    FROM market_trend_prices d WHERE d.source_id=p.source_id AND d.variant_key=p.variant_key AND d.observed_date >= %s),h.observed_date
+                    FROM market_trend_products p JOIN market_trend_prices h USING(source_id,variant_key)
+                    LEFT JOIN market_trend_prices prev ON prev.source_id=h.source_id AND prev.variant_key=h.variant_key
+                    AND prev.observed_date=h.observed_date-1 WHERE p.brand=%s AND h.observed_date=%s AND h.checked_at=%s
+                    ORDER BY p.series,p.model,p.source_id""",(observed-timedelta(days=365),brand,observed,checked)).fetchall())
+        fields=['source_id','variant_key','brand','series','model','title','image_url','url','price','previous_price','history','date']
+        items=[]
+        for r in rows:
+            item=dict(zip(fields,r));item['date']=item['date'].isoformat()
+            if item['brand'] in VISIBLE_SERIES and item['series'] not in VISIBLE_SERIES[item['brand']]:continue
+            items.append(item)
+        for menu in menus:
+            if menu['brand'] in VISIBLE_SERIES:menu['series']=[s for s in menu['series'] if s in VISIBLE_SERIES[menu['brand']]]
+        return jsonify(items=items,brands=list(BRANDS.values()),updated=max((x['updated'] for x in updates.values()),default=None),
+            date=max((x['date'] for x in updates.values()),default=None),source=SOURCE,update_state=update_state,
+            source_menu={'category':'手錶','menus':menus},brand_updates=updates)
 
     @app.post('/api/market-trends/refresh')
     @protected
     def manual_market_refresh():
-        if request.headers.get('X-Watch-Monitor') != '1':
-            return jsonify(error='Missing request header'), 403
+        if request.headers.get('X-Watch-Monitor') != '1':return jsonify(error='Missing request header'),403
+        body=request.get_json(silent=True) or {}
+        if not isinstance(body,dict):return jsonify(error='請選取有效品牌'),400
+        brand_slug=body.get('brand')
+        if brand_slug is not None and (not isinstance(brand_slug,str) or brand_slug not in BRAND_SLUGS):return jsonify(error='請選取有效品牌'),400
         with connect() as c:
-            if not c.execute('SELECT pg_try_advisory_xact_lock(68234017)').fetchone()[0]:
-                return jsonify(error='行情正在更新中'), 409
-            row = c.execute("INSERT INTO market_update_state(singleton,status,started,error) VALUES(true,'pending',now(),'') ON CONFLICT(singleton) DO UPDATE SET status='pending',started=now(),finished=NULL,error='' WHERE market_update_state.status<>'pending' OR market_update_state.started < now()-interval '2 minutes' RETURNING singleton").fetchone()
-            if not row:
-                return jsonify(error='行情正在更新中'), 409
+            if not c.execute('SELECT pg_try_advisory_xact_lock(68234017)').fetchone()[0]:return jsonify(error='行情正在更新中，完成後可選擇單一品牌更新'),409
+            row=c.execute("INSERT INTO market_update_state(singleton,status,started,error) VALUES(true,'pending',now(),'') ON CONFLICT(singleton) DO UPDATE SET status='pending',started=now(),finished=NULL,error='' WHERE market_update_state.status<>'pending' OR market_update_state.started < now()-interval '2 minutes' RETURNING singleton").fetchone()
+            if not row:return jsonify(error='行情正在更新中'),409
         try:
-            subprocess.Popen([sys.executable,os.path.join(app.root_path,'app.py'),'market-force'],cwd=app.root_path)
+            args=[sys.executable,os.path.join(app.root_path,'app.py'),'market-force']
+            if brand_slug:args.append(brand_slug)
+            subprocess.Popen(args,cwd=app.root_path)
         except Exception:
-            with connect() as c:
-                c.execute("UPDATE market_update_state SET status='failed',finished=now(),error='無法啟動行情更新，請重試' WHERE singleton=true")
-            return jsonify(error='無法啟動行情更新'), 503
-        return jsonify(started=True), 202
+            with connect() as c:c.execute("UPDATE market_update_state SET status='failed',finished=now(),error='無法啟動行情更新，請重試' WHERE singleton=true")
+            return jsonify(error='無法啟動行情更新'),503
+        return jsonify(started=True,brand=brand_slug),202
