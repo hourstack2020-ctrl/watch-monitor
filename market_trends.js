@@ -37,7 +37,15 @@ function marketOptions(reset=true){
  const series=[...new Set(menus.flatMap(x=>(x.series||[]).filter(s=>marketSeriesAllowed(x.brand,s))))];
  $('marketSeries').innerHTML='<option value="">全部系列</option>'+series.map(s=>`<option>${esc(s)}</option>`).join('');
  $('marketSeries').value=series.includes(old)?old:'';
+ updateMarketButton();
  renderMarketTrends(reset);
+}
+function updateMarketButton(){
+ const running=!!marketData?.update_state?.running;
+ $('marketRefresh').disabled=running;
+ $('marketRefresh').textContent=running?'行情更新中…':$('marketBrand').value?'更新所選品牌':'更新全部品牌';
+ const selected=$('marketBrand').value,stamp=marketData?.brand_updates?.[selected]?.updated||marketData?.updated;
+ $('marketUpdated').textContent=stamp?'資料更新：'+new Date(stamp).toLocaleString('zh-TW',{timeZone:'Asia/Taipei'})+'｜各品牌獨立發布，每日 12:00 更新':'尚未取得此品牌行情資料';
 }
 function renderMarketTrends(reset=true){
  if(reset)marketLimit=20;
@@ -55,8 +63,9 @@ function renderMarketTrends(reset=true){
    const change=x.previous_price===null?null:x.price-x.previous_price;
    const changeText=change===null?'尚無前一天資料 · 待累積':change===0?'與前一天持平':`${change>0?'▲ 漲價':'▼ 降價'} ${marketHKD(Math.abs(change))}（${(Math.abs(change)/x.previous_price*100).toFixed(2)}%）`;
    const color=change>0?'#b42318':change<0?'#08784b':'#60748a';
-   const history=(x.history||[]).filter(p=>Date.parse(p.date+'T00:00:00Z')>=cutoff);
-   return group+`<article class="market-card"><div class="market-heading">${x.image_url?`<img src="${esc(x.image_url)}" loading="lazy" alt="${esc(x.model)}" onerror="this.hidden=true">`:''}<div><div class="muted">${esc(x.series)}</div><strong>${esc(x.model)}</strong><div class="muted" style="font-size:11px">貨品 ${esc(x.source_id)}</div></div></div><div style="font-size:23px;font-weight:750;margin-top:12px">${marketHKD(x.price)}</div><div style="color:${color};font-weight:700;font-size:14px;margin:8px 0">${changeText}</div>${change!==null?`<div class="muted" style="font-size:12px">前一天 ${marketHKD(x.previous_price)}</div>`:''}${marketChart(history)}<div class="muted" style="font-size:12px">${history.length} 天紀錄 · ${esc(marketData.date)} · 港幣</div><details style="margin-top:10px"><summary>品相／完整名稱</summary><p style="font-size:13px">${esc(x.title)}</p></details><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin-top:12px">查看 VIP Station ↗</a></article>`;
+   const itemCutoff=Date.parse((x.date||marketData.date||'2000-01-01')+'T00:00:00Z')-(days-1)*86400000;
+   const history=(x.history||[]).filter(p=>Date.parse(p.date+'T00:00:00Z')>=itemCutoff);
+   return group+`<article class="market-card"><div class="market-heading">${x.image_url?`<img src="${esc(x.image_url)}" loading="lazy" alt="${esc(x.model)}" onerror="this.hidden=true">`:''}<div><div class="muted">${esc(x.series)}</div><strong>${esc(x.model)}</strong><div class="muted" style="font-size:11px">貨品 ${esc(x.source_id)}</div></div></div><div style="font-size:23px;font-weight:750;margin-top:12px">${marketHKD(x.price)}</div><div style="color:${color};font-weight:700;font-size:14px;margin:8px 0">${changeText}</div>${change!==null?`<div class="muted" style="font-size:12px">前一天 ${marketHKD(x.previous_price)}</div>`:''}${marketChart(history)}<div class="muted" style="font-size:12px">${history.length} 天紀錄 · ${esc(x.date||marketData.date)} · 港幣</div><details style="margin-top:10px"><summary>品相／完整名稱</summary><p style="font-size:13px">${esc(x.title)}</p></details><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin-top:12px">查看 VIP Station ↗</a></article>`;
  }).join('')||'<p class="muted">來源目前沒有符合條件的在售公開報價；不以售罄或詢價資料代替。</p>';
 }
 async function loadMarketTrends(){
@@ -80,7 +89,9 @@ async function refreshMarketManually(){
  $('marketRefresh').disabled=true;
  $('marketUpdateState').textContent='正在啟動獨立行情更新…';
  try{
-  const r=await fetch('/api/market-trends/refresh',{method:'POST',headers:{'X-Watch-Monitor':'1'}});
+  const slugs={'Patek Philippe 百達翡麗':'patek-philippe','Rolex 勞力士':'rolex','Richard Mille 理查德米勒':'richard-mille','Audemars Piguet 愛彼':'audemars-piguet'};
+  const brand=slugs[$('marketBrand').value];
+  const r=await fetch('/api/market-trends/refresh',{method:'POST',headers:{'X-Watch-Monitor':'1','Content-Type':'application/json'},body:JSON.stringify(brand?{brand}:{})});
   const d=await r.json();if(!r.ok&&r.status!==409)throw Error(d.error||'啟動失敗');
   await loadMarketTrends();
  }catch(e){$('marketUpdateState').textContent=e.message;$('marketRefresh').disabled=false}
