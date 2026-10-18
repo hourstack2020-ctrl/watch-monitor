@@ -271,7 +271,16 @@ def image_comparison_candidates(rows):
         for x in g['listings']:candidates[(x['site'],x['url'])]=x
     return list(candidates.values())
 
-def analyse_current_dials():
+def analyse_current_dials(wait_for_crawl=False):
+    if wait_for_crawl:
+        for attempt in range(30):
+            with connect() as c:
+                busy=c.execute("SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND objid=68234016 AND granted)").fetchone()[0]
+            if not busy:break
+            time.sleep(20)
+        else:
+            logging.info('Dial image background check deferred while product crawler is active')
+            return 0
     with connect() as c:
         fields=['site','url','title','price','image_url','missing_runs','status']
         rows=[dict(zip(fields,r)) for r in c.execute("SELECT site,url,title,price,image_url,missing_runs,status FROM watches WHERE price>0 AND missing_runs=0").fetchall()]
@@ -678,7 +687,9 @@ def manual():
 if __name__=='__main__':
     import sys
     if len(sys.argv)>1 and sys.argv[1]=='analyze-dials':
-        try:analyse_current_dials()
+        try:
+            for _ in range(3):
+                if analyse_current_dials(wait_for_crawl=True)<120:break
         except Exception:logging.exception('Dial image background check failed')
     elif len(sys.argv)>1 and sys.argv[1] in ('market','market-force'):
         from market_trends import refresh_if_due
