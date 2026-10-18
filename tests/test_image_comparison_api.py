@@ -15,6 +15,7 @@ class ImageComparisonAPI(unittest.TestCase):
             def execute(self,sql,args=None):
                 if 'FROM watches' in sql:return Result(rows)
                 if 'FROM dial_image_analysis' in sql:return Result(list(evidence.items()))
+                if 'FROM comparison_reviews' in sql:return Result([])
                 raise AssertionError(sql)
         @contextmanager
         def connect():yield DB()
