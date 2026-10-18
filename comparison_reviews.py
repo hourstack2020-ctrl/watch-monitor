@@ -36,11 +36,14 @@ def pair_state(baseline,other,dial,model,evidence,decisions):
     if previous in ('approved','rejected'):return key,previous,''
     b=dial_images.assessment(baseline,dial,evidence)
     o=dial_images.assessment(other,dial,evidence)
-    # A new image still being analysed is not a new review notification.
+    # Explicit matching text is enough unless image evidence contradicts it.
+    # Generic colour names can conceal distinct shades, so keep image checks there.
+    if any(x['status']=='conflict' for x in (b,o)):
+        return key,'pending','商品文字與圖片面盤顏色不一致，請確認'
+    ambiguous=dial.split('／')[0] in ('綠','藍','金')
+    if not ambiguous:return key,'automatic','比價文字條件相同'
     if any(row.get('image_url') and row['image_url'] not in evidence for row in [baseline,other]):
         return key,'analysing','圖片核對中'
-    previous_version=decisions.get(listing_pair_id(baseline,other))
-    if previous_version and previous_version!=key:return key,'pending','商品面盤或圖片已變更，請重新確認是否比價'
     if b['status']=='verified' and o['status']=='verified' and b['bucket']==o['bucket']:return key,'automatic',''
     reasons=list(dict.fromkeys(x['reason'] for x in [b,o] if x['status']!='verified'))
     return key,'pending','；'.join(reasons) or '圖片面盤色彩或明暗不同，請確認是否比價'
@@ -61,6 +64,8 @@ def save_decision(connection,details,decision):
 
 def sync_pending(connect,pairs):
     with connect() as c:
+        # Retire stale pending prompts without touching any user decisions.
+        c.execute("UPDATE comparison_reviews SET last_seen=now()-interval '2 hours' WHERE decision='pending' AND last_seen>now()-interval '1 hour' AND NOT(pair_key=ANY(%s::text[]))",([d['pair_key'] for d in pairs],))
         for details in pairs:
             c.execute('''INSERT INTO comparison_reviews(pair_key,decision,details,reason,last_seen)
                 VALUES(%s,'pending',%s::jsonb,%s,now()) ON CONFLICT(pair_key) DO UPDATE SET
