@@ -89,6 +89,17 @@ def model_of(t):
 def dial_color_of(title):
     # Only explicit dial descriptions; never infer from bezel, strap or nickname.
     if re.search(r'(?:銀灰|灰銀)(?:色)?(?:太陽放射紋|太陽紋|放射紋)?(?:面盤|錶盤|錶面|面)',title):return ''
+    # Reference-specific panda names describe distinct dial layouts, not just
+    # a shared base colour. Keep the filled subdial and its contrasting ring separate.
+    if model_of(title)=='126500LN' and re.search(r'DAYTONA|迪通拿',title,re.I):
+        names=set(re.findall(r'(白|黑)熊貓',title))
+        if len(names)==1 and not re.search(r'漸層|雙色|多色|彩色|滿天星|隕石|珍珠母貝|貝殼',title):
+            main=next(iter(names));ring='黑' if main=='白' else '銀'
+            explicit=set(re.findall(r'(黑|白|銀|金|灰|藍|綠)(?:色)?(?:面盤|錶盤|錶面)',title))
+            sub=set(re.findall(r'(黑|白|銀|金|灰|藍|綠)(?:色)?(?:小錶盤|小面盤|子盤|計時盤|三眼)',title))
+            rings=set(re.findall(r'(黑|白|銀|金|灰|藍|綠)(?:色)?計時圈',title))
+            if explicit-{main} or sub-{main} or rings-{ring}:return ''
+            return main+'／小錶盤'+main+'色／計時圈'+ring+'色'
     colors=r'開心果綠|牛油果綠|煙燻綠|煙燻藍|煙燻灰|天藍|蒂芙尼藍|TIFFANY藍|冰藍|淺藍|深藍|亮藍|海軍藍|午夜藍|薄荷綠|橄欖綠|墨綠|深綠|淺綠|綠松石|香檳金|香檳|玫瑰金|巧克力|咖啡|棕|褐|黑|白|銀|金|灰|藍|綠|紅|粉紅|粉|紫|黃|橘|橙'
     pattern=r'('+colors+r')(?:色)?(?:太陽放射紋|太陽紋|放射紋|波紋|條紋|巴黎釘紋|旭日紋|格紋|鏤空|漆|珍珠母貝|貝殼)?(?:面盤|錶盤|錶面|面)(?!盤?時標|框|圈)'
     found={m.group(1) for m in re.finditer(pattern,title)}
