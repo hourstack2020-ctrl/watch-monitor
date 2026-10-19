@@ -71,6 +71,15 @@ def analyse_image(data):
     return {'status':'analysed','reason':'','family':family,'tone':tone,'confidence':round(dominance,3),
         'hsv':[round(float(v),2) for v in med],'circle':[round(x/w,4),round(y/h,4),round(r/side,4)],'sha256':hashlib.sha256(data).hexdigest()}
 
+def analyse_with_visual_review(data,previous=None):
+    result=analyse_image(data);digest=hashlib.sha256(data).hexdigest()
+    # Reuse a visual audit only after re-downloading and checking the exact bytes.
+    if previous and previous.get('visual_verified') and previous.get('sha256')==digest:
+        result=dict(previous,automated_result=result)
+    result['sha256']=digest
+    return result
+
+
 def load_evidence(connection,rows):
     urls=list({r.get('image_url') for r in rows if r.get('image_url')})
     if not urls:return {}
@@ -110,7 +119,9 @@ def refresh_images(connect,rows,limit=120):
                     ttl=timedelta(days=7) if old and old[2].get('status')=='analysed' else timedelta(hours=6)
                     if old and old[0]==VERSION and old[1]>now-ttl:continue
                     if count>=limit:break
-                    try:result=analyse_image(download_image(session,url))
+                    try:
+                        data=download_image(session,url)
+                        result=analyse_with_visual_review(data,old[2] if old and old[0]==VERSION else None)
                     except (requests.RequestException,ValueError,OSError,cv2.error,Image.DecompressionBombError) as exc:
                         result={'status':'review','reason':'圖片讀取或解析失敗，待確認'}
                         logging.warning('Dial image check failed for %s: %s',url,type(exc).__name__)
