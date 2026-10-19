@@ -179,6 +179,18 @@ def item_dial_color(item):
     title=item.get('title') or ''
     parsed=urllib.parse.urlsplit(item.get('url') or '')
     listing_id=urllib.parse.parse_qs(parsed.query).get('ID',[''])[0]
+    # Visually verified source photos: these listings omit dial colour in text.
+    # Restrict the fallback to the exact model, store and unchanged image URL.
+    black_panda_photos={
+        'https://www.hourstack.com.tw/product/product_big/66A02155-BD9F-4003-B890-0CA49DFD3444.JPG',
+        'https://www.hourstack.com.tw/product/product_big/28062CA8-DA4C-47BB-9D03-4D0A6D9C79FF.JPG',
+    }
+    if (item.get('site')=='鐘點站' and parsed.hostname=='www.hourstack.com.tw'
+        and parsed.path.lower()=='/product_open.asp' and model_of(title)=='126500LN'
+        and item.get('image_url') in black_panda_photos
+        and not dial_color_of(title)
+        and not re.search(r'熊貓|(?:白|銀|金|灰|藍|綠|紅|粉|紫|黃|棕)(?:色)?(?:面盤|錶盤|錶面)|隕石|貝殼|漸層|彩色',title)):
+        return '黑／小錶盤黑色／計時圈銀色'
     # Exact listing colour verified from the user's photo; leave source text untouched.
     if (item.get('site'),parsed.hostname,listing_id)==('鐘點站','www.hourstack.com.tw','18767') and parsed.path.lower()=='/product_open.asp' and model_of(title)=='126000' and '126000 綠色面盤' in title:
         return dial_color_of(title.replace('126000 綠色面盤','126000 深綠色面盤',1))
