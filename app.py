@@ -87,11 +87,15 @@ def model_of(t):
     return ''
 
 def dial_color_of(title):
+    source_reference=model_of(title)
+    title=re.sub(r'\s+','',title)
     # Only explicit dial descriptions; never infer from bezel, strap or nickname.
     if re.search(r'(?:銀灰|灰銀)(?:色)?(?:太陽放射紋|太陽紋|放射紋)?(?:面盤|錶盤|錶面|面)',title):return ''
+    if re.search(r'DATEJUST|日誌',title,re.I) and re.search(r'溫布頓|溫布敦',title):
+        if not re.search(r'(?:白|藍|黑|紅|粉)(?:色)?(?:面盤|錶盤|錶面)',title):return '灰／溫布頓／羅馬時標'
     # Reference-specific panda names describe distinct dial layouts, not just
     # a shared base colour. Keep the filled subdial and its contrasting ring separate.
-    if model_of(title)=='126500LN' and re.search(r'DAYTONA|迪通拿',title,re.I):
+    if source_reference in {'126500LN','116500LN'} and re.search(r'DAYTONA|迪通拿',title,re.I):
         names=set(re.findall(r'(白|黑)熊貓',title))
         if len(names)==1 and not re.search(r'漸層|雙色|多色|彩色|滿天星|隕石|珍珠母貝|貝殼',title):
             main=next(iter(names));ring='黑' if main=='白' else '銀'
@@ -101,14 +105,23 @@ def dial_color_of(title):
             if explicit-{main} or sub-{main} or rings-{ring}:return ''
             return main+'／小錶盤'+main+'色／計時圈'+ring+'色'
     colors=r'開心果綠|牛油果綠|煙燻綠|煙燻藍|煙燻灰|天藍|蒂芙尼藍|TIFFANY藍|冰藍|淺藍|深藍|亮藍|海軍藍|午夜藍|薄荷綠|橄欖綠|墨綠|深綠|淺綠|綠松石|香檳金|香檳|玫瑰金|巧克力|咖啡|棕|褐|黑|白|銀|金|灰|藍|綠|紅|粉紅|粉|紫|黃|橘|橙'
-    pattern=r'('+colors+r')(?:色)?(?:太陽放射紋|太陽紋|放射紋|波紋|條紋|巴黎釘紋|旭日紋|格紋|鏤空|漆|珍珠母貝|貝殼)?(?:面盤|錶盤|錶面|面)(?!盤?時標|框|圈)'
+    pattern=r'('+colors+r')(?:色)?(?:太陽放射紋|太陽飾紋|太陽紋|放射紋|蜂巢圖案|蜂巢紋|蜂巢|水波紋|波浪紋|橫紋|波紋|條紋|巴黎釘紋|旭日紋|格紋|鏤空|漆|珍珠母貝|貝殼)?(?:面盤|錶盤|錶面|面)(?!盤?時標|框|圈)'
     found={m.group(1) for m in re.finditer(pattern,title)}
     # OP 36 listings also explicitly name the pistachio dial without a dial suffix.
-    if not found and model_of(title)=='126000' and re.search(r'OYSTER\s*PERPETUAL|蠔式[恆恒]動',title,re.I):
+    if not found and source_reference in {'126000','124200','277200','134300','124300'} and re.search(r'OYSTER\s*PERPETUAL|蠔式[恆恒]動',title,re.I):
         found.update(re.findall(r'(開心果綠|牛油果綠)(?:色)?',title))
+    if not found and re.search(r'ROLEX|勞力士',title,re.I):
+        ref=source_reference
+        if ref in {'126610LN','116610LN','126613LN','116613LN','124060','114060'} and '黑水鬼' in title:
+            found.add('黑')
+        if re.search(r'DATEJUST|日誌',title,re.I):
+            found.update(re.findall(r'(白|黑|銀|藍|灰|粉紅)羅馬',title))
+            for name in ('薄荷綠','開心果綠','牛油果綠','煙燻綠','煙燻藍','煙燻灰'):
+                if re.search(name+r'(?!色?(?:錶帶|鏈帶|鍊帶|橡膠|皮帶|指針))',title):found.add(name)
     found={'開心果綠' if x=='牛油果綠' else x for x in found}
     # Distinct special dials must not collapse into a plain base color.
-    if re.search(r'熊貓|漸層|漸藍|雙色|多色|彩色|滿天星|袖扣|項鍊|錶盒',title):return ''
+    if re.search(r'熊貓|漸層|漸藍|滿天星|袖扣|項鍊|錶盒',title):return ''
+    if re.search(r'(?:雙色|多色|彩色)(?:面盤|錶盤|錶面)|(?:面盤|錶盤|錶面)(?:雙色|多色|彩色)(?!錶帶|鏈帶|鍊帶|陶瓷圈|錶圈)',title):return ''
     if re.search(r'漸變(?!煙燻)',title):return ''
     if len(found)!=1:return ''
     color=found.pop()
@@ -129,9 +142,9 @@ def dial_color_of(title):
         (r'(?:隕石|隕石紋)(?:面盤|錶盤|面)','隕石'),
         (r'蜂巢(?:圖案|紋)?(?:面盤|錶盤|錶面|面)','蜂巢紋'),
         (r'(?:橫向雕紋|橫紋|條紋)(?:面盤|錶盤|錶面|面)','條紋'),
-        (r'(?:太陽放射紋|太陽紋|放射紋|旭日紋)(?:面盤|錶盤|錶面|面)','太陽紋'),
-        (r'波紋(?:面盤|錶盤|錶面|面)','波紋'),
-        (r'羅馬(?:數字)?(?:時標|面盤|錶盤|面)','羅馬時標'),
+        (r'(?:太陽放射紋|太陽飾紋|太陽紋|放射紋|旭日紋)(?:面盤|錶盤|錶面|面)','太陽紋'),
+        (r'(?:水波紋|波浪紋|波紋)(?:面盤|錶盤|錶面|面)','波紋'),
+        (r'羅馬(?:數字)?(?:時標|面盤|錶盤|面)|(?:白|黑|銀|藍|灰|粉紅)羅馬','羅馬時標'),
         (r'(?:鑽石|鑲鑽)(?:時標|刻度)','鑽石時標'),
         (r'阿拉伯(?:數字)?(?:時標|面盤|錶盤|面)','阿拉伯時標'),
     ]:
