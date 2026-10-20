@@ -401,7 +401,27 @@ def analyse_current_dials(wait_for_crawl=False):
     comparison_reviews.sync_pending(connect,result['review_pairs'])
     notifications=comparison_reviews.notify_pending(connect)
     logging.info('Dial images checked: %d; review pairs: %d; review notifications sent: %d, failed: %d',count,len(result['review_pairs']),notifications['sent'],notifications['failed'])
+    notify_comparison_changes()
     return count
+
+
+def current_comparison_groups():
+    with connect() as c:
+        fields=['site','url','title','brand','model','year','condition','price','image_url','updated','status','missing_runs']
+        rows=[dict(zip(fields,r)) for r in c.execute('SELECT site,url,title,brand,model,year,condition,price,image_url,updated,status,missing_runs FROM watches WHERE price>0 AND missing_runs=0').fetchall()]
+        evidence=dial_images.load_evidence(c,rows)
+        decisions=comparison_reviews.load_decisions(c)
+    return same_product_items(rows,evidence,decisions)
+
+
+def notify_comparison_changes():
+    try:
+        with connect() as c:
+            latest=c.execute('SELECT status FROM crawl_runs ORDER BY id DESC LIMIT 1').fetchone()
+        if not latest or latest[0]!='completed':return
+        result=push.notify_comparison_updates(connect,current_comparison_groups)
+        logging.info('Comparison-update notifications: %d sent, %d failed, %d initialized',result['sent'],result['failed'],result['initialized'])
+    except Exception:logging.exception('Comparison update notification check failed; will retry later')
 
 
 def change_of(old,item):
@@ -853,3 +873,4 @@ if __name__=='__main__':
 # One background cache fill on web startup; advisory lock prevents duplicate workers.
 if __name__=='app' and os.environ.get('DATABASE_URL'):
     subprocess.Popen([sys.executable,os.path.abspath(__file__),'analyze-dials'],cwd=app.root_path)
+
