@@ -77,7 +77,9 @@ def model_of(t):
         'Hublot':r'(?<![A-Z0-9])\d{3}\.[A-Z0-9]{2}\.\d{4}\.[A-Z0-9]{2}(?:\.[A-Z0-9]+){0,3}(?![A-Z0-9])',
     }
     if brand in patterns:
-        match=re.search(patterns[brand],u)
+        matches=list(re.finditer(patterns[brand],u))
+        # A title may start with an abbreviated reference before the full one.
+        match=max(matches,key=lambda m:len(m.group())) if brand=='Audemars Piguet' and matches else (matches[0] if matches else None)
         return re.sub(r'\s+','',match.group()) if match else ''
     for m in MODEL.finditer(t):
         s=m.group().upper()
@@ -89,6 +91,12 @@ def model_of(t):
 def dial_color_of(title):
     source_reference=model_of(title)
     title=re.sub(r'\s+','',title)
+    # This exact CODE 11.59 reference is described as smoky grey in both
+    # verified listings; the dial noun and sunburst wording may be omitted.
+    if (source_reference=='15210CR.OO.A002CR.01' and re.search(r'CODE11[.]59',title,re.I)
+        and re.search(r'煙燻灰(?:色)?(?!錶帶|皮帶|帶|指針)',title)
+        and not re.search(r'改裝|副廠|隕石|鑽石面|貝殼|(?:黑|白|藍|綠|銀)(?:色)?(?:面盤|錶盤|錶面)',title)):
+        return '煙燻灰／太陽紋'
     # Only explicit dial descriptions; never infer from bezel, strap or nickname.
     if re.search(r'(?:銀灰|灰銀)(?:色)?(?:太陽放射紋|太陽紋|放射紋)?(?:面盤|錶盤|錶面|面)',title):return ''
     if re.search(r'DATEJUST|日誌',title,re.I) and re.search(r'溫布頓|溫布敦',title):
