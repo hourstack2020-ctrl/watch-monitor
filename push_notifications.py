@@ -1,5 +1,5 @@
 """Web Push for explicitly subscribed devices; no credentials in payloads."""
-import os,json,base64,hashlib,urllib.parse
+import os,json,base64,hashlib,urllib.parse,logging
 from pywebpush import webpush,WebPushException
 
 def configured():return bool(os.getenv('VAPID_PRIVATE_KEY') and os.getenv('VAPID_PUBLIC_KEY'))
@@ -122,3 +122,68 @@ def notify_market_events(connect):
                 history_id=(SELECT min(history_id) FROM push_market_cursor WHERE subscription_id=%s)
                 WHERE subscription_id=%s""",(sid,sid,sid))
     return {'sent':sent,'failed':failed}
+
+
+def comparison_snapshot(groups):
+    """Only accepted, currently visible comparisons containing our own store."""
+    snapshots={};details={}
+    for group in groups:
+        if not any(x['site']=='鐘點站' for x in group['listings']):continue
+        key=subscription_id(json.dumps([group['brand'],group['model'],group['dial_color']],ensure_ascii=False))
+        entries=snapshots.setdefault(key,{})
+        for row in group['listings']:
+            entries[subscription_id(row['site']+'\n'+row['url'])]=int(row['price'])
+        details[key]=group
+    return snapshots,details
+
+
+def comparison_updates(previous,current,details):
+    updates=[]
+    for key,entries in current.items():
+        old=previous.get(key,{})
+        added=sum(identity not in old for identity in entries)
+        changed=sum(identity in old and old[identity]!=price for identity,price in entries.items())
+        if added or changed:updates.append((details[key],added,changed))
+    return updates
+
+
+def comparison_update_payload(updates):
+    lines=[]
+    for group,added,changed in updates[:3]:
+        lines.append(f"{group['brand']} {group['model']}｜{group['dial_color']}")
+        lines.append(f"新增 {added} 筆・變價 {changed} 筆｜價差 NT${group['spread']:,}")
+    if len(updates)>3:lines.append('另有更多組合，點擊查看')
+    return {'title':f'商品比價｜{len(updates)} 組新訊息','body':'\n'.join(lines),'url':'/#comparisonSection','tag':'comparison-updates'}
+
+
+def notify_comparison_updates(connect,compare):
+    if not configured():return {'sent':0,'failed':0,'initialized':0}
+    sent=failed=initialized=0
+    with connect() as lock:
+        if not lock.execute('SELECT pg_try_advisory_lock(68234020)').fetchone()[0]:return {'sent':0,'failed':0,'initialized':0}
+        try:
+            with connect() as c:
+                subscriptions=c.execute('SELECT id,subscription FROM push_subscriptions').fetchall()
+            if not subscriptions:return {'sent':0,'failed':0,'initialized':0}
+            current,details=comparison_snapshot(compare()['groups'])
+            for sid,subscription in subscriptions:
+                with connect() as c:
+                    previous=c.execute('SELECT snapshot FROM push_comparison_state WHERE subscription_id=%s',(sid,)).fetchone()
+                # Establish a baseline without sending old listings as new alerts.
+                updates=comparison_updates(previous[0],current,details) if previous else []
+                if updates:
+                    try:send(subscription,comparison_update_payload(updates))
+                    except WebPushException as exc:
+                        if exc.response is not None and exc.response.status_code in (404,410):
+                            with connect() as c:c.execute('DELETE FROM push_subscriptions WHERE id=%s',(sid,))
+                        failed+=1;continue
+                    except Exception:
+                        logging.warning('Comparison update push failed; will retry later');failed+=1;continue
+                    sent+=1
+                elif previous is None:initialized+=1
+                with connect() as c:
+                    c.execute('''INSERT INTO push_comparison_state(subscription_id,snapshot) VALUES(%s,%s::jsonb)
+                        ON CONFLICT(subscription_id) DO UPDATE SET snapshot=EXCLUDED.snapshot,updated_at=now()''',
+                        (sid,json.dumps(current,separators=(',',':'))))
+            return {'sent':sent,'failed':failed,'initialized':initialized}
+        finally:lock.execute('SELECT pg_advisory_unlock(68234020)')
