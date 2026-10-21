@@ -132,7 +132,8 @@ def comparison_snapshot(groups):
         key=subscription_id(json.dumps([group['brand'],group['model'],group['dial_color']],ensure_ascii=False))
         entries=snapshots.setdefault(key,{})
         for row in group['listings']:
-            entries[subscription_id(row['site']+'\n'+row['url'])]=int(row['price'])
+            activity=row.get('activity_at')
+            entries[subscription_id(row['site']+'\n'+row['url'])]=[int(row['price']),activity.isoformat() if hasattr(activity,'isoformat') else activity]
         details[key]=group
     return snapshots,details
 
@@ -142,7 +143,12 @@ def comparison_updates(previous,current,details):
     for key,entries in current.items():
         old=previous.get(key,{})
         added=sum(identity not in old for identity in entries)
-        changed=sum(identity in old and old[identity]!=price for identity,price in entries.items())
+        def differs(identity,value):
+            before=old[identity]
+            # Upgrade legacy price-only snapshots silently when prices match.
+            if not isinstance(before,list):return before!=value[0]
+            return before!=value
+        changed=sum(identity in old and differs(identity,value) for identity,value in entries.items())
         if added or changed:updates.append((details[key],added,changed))
     return updates
 
@@ -151,7 +157,7 @@ def comparison_update_payload(updates):
     lines=[]
     for group,added,changed in updates[:3]:
         lines.append(f"{group['brand']} {group['model']}｜{group['dial_color']}")
-        lines.append(f"新增 {added} 筆・變價 {changed} 筆｜價差 NT${group['spread']:,}")
+        lines.append(f"新增 {added} 筆・價格／資料更新 {changed} 筆｜價差 NT${group['spread']:,}")
     if len(updates)>3:lines.append('另有更多組合，點擊查看')
     return {'title':f'商品比價｜{len(updates)} 組新訊息','body':'\n'.join(lines),'url':'/#comparisonSection','tag':'comparison-updates'}
 
