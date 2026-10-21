@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit, urljoin
 import cv2
+import bezel_checks
 import numpy as np
 import requests
 from PIL import Image
@@ -69,13 +70,14 @@ def analyse_image(data):
     if family=='neutral':tone='light' if med[2]>=175 else 'dark' if med[2]<80 else 'mid'
     else:tone='light' if med[2]>=150 and med[1]<135 else 'dark' if med[2]<150 and med[1]>=135 else 'mid'
     return {'status':'analysed','reason':'','family':family,'tone':tone,'confidence':round(dominance,3),
+        'bezel_version':bezel_checks.VERSION,'bezel':bezel_checks.image_features(im,[x/w,y/h,r/side]),
         'hsv':[round(float(v),2) for v in med],'circle':[round(x/w,4),round(y/h,4),round(r/side,4)],'sha256':hashlib.sha256(data).hexdigest()}
 
 def analyse_with_visual_review(data,previous=None):
     result=analyse_image(data);digest=hashlib.sha256(data).hexdigest()
     # Reuse a visual audit only after re-downloading and checking the exact bytes.
     if previous and previous.get('visual_verified') and previous.get('sha256')==digest:
-        result=dict(previous,automated_result=result)
+        result=dict(previous,automated_result=result,bezel=result.get('bezel',{}),bezel_version=bezel_checks.VERSION)
     result['sha256']=digest
     return result
 
@@ -117,7 +119,7 @@ def refresh_images(connect,rows,limit=120):
                 for url in urls:
                     old=existing.get(url)
                     ttl=timedelta(days=7) if old and old[2].get('status')=='analysed' else timedelta(hours=6)
-                    if old and old[0]==VERSION and old[1]>now-ttl:continue
+                    if old and old[0]==VERSION and old[1]>now-ttl and old[2].get('bezel_version')==bezel_checks.VERSION:continue
                     if count>=limit:break
                     try:
                         data=download_image(session,url)

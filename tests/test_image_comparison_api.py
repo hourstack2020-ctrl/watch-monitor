@@ -10,7 +10,7 @@ class Result:
 class ImageComparisonAPI(unittest.TestCase):
     def response(self,evidence):
         now=datetime(2026,10,18,tzinfo=timezone.utc)
-        rows=[(site,site,'ROLEX Oyster Perpetual 126000 綠色面盤','Rolex','126000','2026','二手',price,'image-'+site,now,'unchanged',0) for site,price in [('鐘點站',200),('永生',100)]]
+        rows=[(site,site,'ROLEX Oyster Perpetual 126000 綠色面盤 光滑錶圈','Rolex','126000','2026','二手',price,'image-'+site,now,'unchanged',0) for site,price in [('鐘點站',200),('永生',100)]]
         class DB:
             def execute(self,sql,args=None):
                 if 'FROM watches' in sql:return Result(rows)
@@ -25,6 +25,8 @@ class ImageComparisonAPI(unittest.TestCase):
         evidence={'image-'+site:{'status':'analysed','family':'green','tone':'dark'} for site in ['鐘點站','永生']}
         r=self.response(evidence);self.assertEqual(r.status_code,200)
         d=r.get_json();self.assertTrue(d['image_checked']);self.assertEqual(len(d['groups']),1)
+        self.assertIn('錶圈文字或圖片任一相符',d['rules'])
+        self.assertEqual(d['groups'][0]['listings'][0]['bezel_method'],'文字')
     def test_unchecked_images_listed_for_review(self):
         r=self.response({});self.assertEqual(r.status_code,200)
         d=r.get_json();self.assertEqual(d['groups'],[]);self.assertEqual(len(d['image_review']),2)

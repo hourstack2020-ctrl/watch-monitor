@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 from functools import wraps
 from flask import Flask, request, jsonify, Response, send_file, session
 import comparison_reviews
+import bezel_checks
 import dial_images
 import watchstore_source
 import requests, psycopg
@@ -304,7 +305,7 @@ def same_product_items(rows,image_evidence=None,review_decisions=None):
         visual=visual_bucket(row,image_evidence)
         if visual is None:continue
         key=(brand,normalized,dial)+visual
-        grouped.setdefault(key,[]).append(dict(row,strap=item_strap(row)))
+        grouped.setdefault(key,[]).append(dict(row,strap=item_strap(row),bezel=bezel_checks.text_label(row)))
         if row['site']==BASELINE_SITE:baseline.setdefault(key,[]).append(row)
         else:competitors.append((key,row))
     items=[]
@@ -312,7 +313,7 @@ def same_product_items(rows,image_evidence=None,review_decisions=None):
         for own in baseline.get(key,[]):
             difference=own['price']-row['price']
             items.append({'brand':key[0],'model':model_of(row['title']),'dial_color':key[2],
-                'competitor':dict(row,strap=item_strap(row)),'baseline':dict(own,strap=item_strap(own)),
+                'competitor':dict(row,strap=item_strap(row),bezel=bezel_checks.text_label(row)),'baseline':dict(own,strap=item_strap(own),bezel=bezel_checks.text_label(own)),
                 'difference':difference,'difference_percent':round(100*difference/own['price'],1)})
     groups=[]
     for key,listings in grouped.items():
@@ -357,7 +358,7 @@ def reviewed_comparisons(rows,evidence,decisions):
                 if choice not in ('automatic','approved'):continue
                 difference=b['price']-o['price']
                 items.append(dict(brand=source['brand'],model=model_of(o['title']),dial_color=dial,
-                    competitor=o,baseline=b,difference=difference,difference_percent=round(100*difference/b['price'],1),manual_review=choice=='approved'))
+                    competitor=o,baseline=b,difference=difference,difference_percent=round(100*difference/b['price'],1),manual_review=choice=='approved',bezel_match=bezel_checks.match(b,o,evidence)))
         clusters=[]
         for b in clocks:
             matches=[o for o in others if state(b,o) in ('automatic','approved')]
@@ -375,7 +376,7 @@ def reviewed_comparisons(rows,evidence,decisions):
             groups.append(dict(brand=source['brand'],model=source['model'],dial_color=dial,
                 store_count=len({x['site'] for x in listings}),listing_count=len(listings),minimum_price=minimum,
                 maximum_price=maximum,spread=maximum-minimum,manual_review_count=manual,
-                listings=[dict(x,difference_from_lowest=x['price']-minimum,difference_percent=round(100*(x['price']-minimum)/minimum,1)) for x in listings]))
+                listings=[dict(x,**bezel_checks.listing_info(x,listings,evidence),difference_from_lowest=x['price']-minimum,difference_percent=round(100*(x['price']-minimum)/minimum,1)) for x in listings]))
     return dict(baseline_models=raw['baseline_models'],image_checked=True,image_review=list(review_items.values()),
         review_pairs=sorted(pending,key=lambda x:(x['model'],x['other']['site'],x['pair_key'])),image_pending_count=len(waiting),
         items=sorted(items,key=lambda x:(-x['difference'],x['model'],x['competitor']['url'],x['baseline']['url'])),
@@ -738,7 +739,9 @@ def comparisons():
     with connect() as c:
         evidence=dial_images.load_evidence(c,rows)
         decisions=comparison_reviews.load_decisions(c)
-    return jsonify(same_product_items(rows,evidence,decisions))
+    result=same_product_items(rows,evidence,decisions)
+    result['rules']='同品牌、同型號、同面盤；錶圈文字或圖片任一相符。年份、錶況、錶帶差異另外標示。'
+    return jsonify(result)
 
 @app.get('/product-comparison.js')
 @protected

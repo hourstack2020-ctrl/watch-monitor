@@ -28,7 +28,7 @@ class DialImageChecks(unittest.TestCase):
         images={'鐘點站':{'status':'analysed','family':'green','tone':'dark'},'永生':{'status':'analysed','family':'green','tone':'light'}}
         self.assertEqual(same_product_items(rows,images)['groups'],[])
     def test_low_price_alert_requires_image_evidence(self):
-        rows=[dict(site=site,url=site,title='ROLEX 126000 綠色面盤 2026年保卡 五株錶帶',price=price,image_url=site) for site,price in [('鐘點站',200),('永生',100)]]
+        rows=[dict(site=site,url=site,title='ROLEX 126000 綠色面盤 2026年保卡 五株錶帶 光滑錶圈',price=price,image_url=site) for site,price in [('鐘點站',200),('永生',100)]]
         self.assertEqual(lower_price_items(rows,{})['items'],[])
         evidence={x['image_url']:{'status':'analysed','family':'green','tone':'dark'} for x in rows}
         self.assertEqual(len(lower_price_items(rows,evidence)['items']),1)

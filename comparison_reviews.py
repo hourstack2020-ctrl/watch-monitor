@@ -5,6 +5,7 @@ import logging
 import push_notifications as push
 from pywebpush import WebPushException
 import dial_images
+import bezel_checks
 
 
 def review_key(baseline,other,dial,model,evidence):
@@ -13,6 +14,8 @@ def review_key(baseline,other,dial,model,evidence):
         image=evidence.get(url) or {}
         return [row['site'],row['url'],url,image.get('sha256') or 'unavailable']
     payload=[model,dial,identity(baseline),identity(other)]
+    bezels=[bezel_checks.text_attributes(x.get('title')) for x in [baseline,other]]
+    if any(bezels):payload.append(bezels)
     return hashlib.sha256(json.dumps(payload,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
 
 
@@ -34,6 +37,8 @@ def pair_state(baseline,other,dial,model,evidence,decisions):
     key=review_key(baseline,other,dial,model,evidence)
     previous=decisions.get(key)
     if previous in ('approved','rejected'):return key,previous,''
+    bezel=bezel_checks.match(baseline,other,evidence)
+    if not bezel['matched']:return key,'pending',bezel['reason']
     b=dial_images.assessment(baseline,dial,evidence)
     o=dial_images.assessment(other,dial,evidence)
     # Explicit matching text is enough unless image evidence contradicts it.

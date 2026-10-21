@@ -6,8 +6,8 @@ import app as monitor
 
 class ComparisonReviews(unittest.TestCase):
     def setUp(self):
-        self.b=dict(site='鐘點站',url='clock',image_url='clock.jpg',title='ROLEX 126000 綠色面盤 2026年保卡 五株錶帶',price=200)
-        self.o=dict(site='永生',url='other',image_url='other.jpg',title='ROLEX 126000 綠色面盤 2026年保卡 五株錶帶',price=100)
+        self.b=dict(site='鐘點站',url='clock',image_url='clock.jpg',title='ROLEX 126000 綠色面盤 2026年保卡 五株錶帶 光滑錶圈',price=200)
+        self.o=dict(site='永生',url='other',image_url='other.jpg',title='ROLEX 126000 綠色面盤 2026年保卡 五株錶帶 光滑錶圈',price=100)
         self.e={'clock.jpg':{'status':'review','reason':'面盤反光'},'other.jpg':{'status':'analysed','family':'green','tone':'light','sha256':'hash'}}
         self.key=reviews.review_key(self.b,self.o,'綠','126000',self.e)
     def test_uncertain_pair_asks_for_review(self):

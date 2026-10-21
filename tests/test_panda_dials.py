@@ -17,8 +17,8 @@ class PandaDialChecks(unittest.TestCase):
             self.assertEqual(dial_color_of(text),'',text)
 
     def test_verified_clock_photo_supplies_missing_black_dial(self):
-        own=dict(site='鐘點站',url='https://www.hourstack.com.tw/product_open.asp?ID=18357',title='ROLEX Cosmograph Daytona 126500LN 計時碼表 秒殺經典款 2026年保卡',image_url='https://www.hourstack.com.tw/product/product_big/66A02155-BD9F-4003-B890-0CA49DFD3444.JPG',price=948000)
-        other=dict(site='永生',url='other',title='ROLEX Daytona 126500LN 黑熊貓 亮黑色面盤搭配銀色計時圈',price=963000)
+        own=dict(site='鐘點站',url='https://www.hourstack.com.tw/product_open.asp?ID=18357',title='ROLEX Cosmograph Daytona 126500LN 計時碼表 秒殺經典款 2026年保卡 光滑錶圈',image_url='https://www.hourstack.com.tw/product/product_big/66A02155-BD9F-4003-B890-0CA49DFD3444.JPG',price=948000)
+        other=dict(site='永生',url='other',title='ROLEX Daytona 126500LN 黑熊貓 亮黑色面盤搭配銀色計時圈 光滑錶圈',price=963000)
         self.assertEqual(item_dial_color(own),dial_color_of(other['title']))
         self.assertEqual(len(same_product_items([own,other],{}, {})['groups']),1)
         self.assertEqual(item_dial_color(dict(own,image_url='https://www.hourstack.com.tw/new.jpg')),'')
