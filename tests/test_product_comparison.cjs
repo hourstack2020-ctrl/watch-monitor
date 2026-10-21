@@ -1,7 +1,7 @@
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
-const context={};vm.createContext(context);vm.runInContext(fs.readFileSync('product-comparison.js','utf8'),context);
+const context={document:{addEventListener(){}}};vm.createContext(context);vm.runInContext(fs.readFileSync('product-comparison.js','utf8'),context);
 for(const [title,want] of [
  ['ROLEX 2026年新式保卡','新式保卡'],['2020年 木紋保卡','木紋保卡'],
  ['2010年紙本保單','紙本保單'],['電子保卡','電子保卡'],['舊式保卡','舊式保卡'],

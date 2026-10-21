@@ -15,24 +15,53 @@ function listingComparisonButton(item){return `<button type="button" class="list
 function listingComparisonGroups(data,item){
  return (data.groups||[]).filter(g=>g.listings.some(x=>x.site===item.site&&x.url===item.url)&&g.listings.some(x=>x.site==='鐘點站'));
 }
-let listingComparisonRequest=0;
-async function openListingComparison(button){
- let dialog=document.getElementById('listingComparisonDialog');
- if(!dialog){
-  dialog=document.createElement('dialog');dialog.id='listingComparisonDialog';dialog.setAttribute('aria-labelledby','listingComparisonTitle');
-  dialog.innerHTML='<div class="top"><h2 id="listingComparisonTitle">與鐘點站同款比價</h2><button type="button" onclick="document.getElementById(\'listingComparisonDialog\').close()" aria-label="關閉比價視窗">關閉 ✕</button></div><div id="listingComparisonContent" aria-live="polite"></div>';
-  document.body.append(dialog);
-  dialog.addEventListener('close',()=>listingComparisonRequest++);
+let listingComparisonRequest=0,listingComparisonFocus=null,listingComparisonOverflow='';
+function closeListingComparison(){
+ const overlay=document.getElementById('listingComparisonOverlay');
+ if(!overlay||overlay.hidden)return;
+ overlay.hidden=true;listingComparisonRequest++;
+ document.body.style.overflow=listingComparisonOverflow;
+ listingComparisonFocus?.focus({preventScroll:true});
+}
+function listingComparisonIsOpen(){return document.getElementById('listingComparisonOverlay')?.hidden===false}
+function ensureListingComparison(){
+ let overlay=document.getElementById('listingComparisonOverlay');
+ if(!overlay){
+  overlay=document.createElement('div');overlay.id='listingComparisonOverlay';overlay.hidden=true;
+  overlay.innerHTML='<div id="listingComparisonDialog" role="dialog" aria-modal="true" aria-labelledby="listingComparisonTitle" tabindex="-1"><div class="top"><h2 id="listingComparisonTitle">與鐘點站同款比價</h2><button type="button" id="listingComparisonClose" aria-label="關閉比價視窗">關閉 ✕</button></div><div id="listingComparisonContent" aria-live="polite"></div></div>';
+  document.body.append(overlay);
+  document.getElementById('listingComparisonClose').addEventListener('click',closeListingComparison);
+  overlay.addEventListener('click',event=>{if(event.target===overlay)closeListingComparison()});
+  overlay.addEventListener('keydown',event=>{
+   if(event.key==='Escape'){event.preventDefault();closeListingComparison()}
+   if(event.key==='Tab'){
+    const controls=[...overlay.querySelectorAll('button:not([disabled]),a[href],summary,[tabindex="0"]')];
+    const first=controls[0],last=controls[controls.length-1];
+    if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus()}
+    else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus()}
+   }
+  });
  }
+ return overlay;
+}
+// Capture taps so previously rendered inline buttons and newly rendered cards both work.
+document.addEventListener('click',event=>{
+ const button=event.target.closest?.('.listing-compare');
+ if(!button)return;
+ event.preventDefault();event.stopPropagation();openListingComparison(button);
+},true);
+async function openListingComparison(button){
+ const overlay=ensureListingComparison();
+ if(overlay.hidden){listingComparisonFocus=button;listingComparisonOverflow=document.body.style.overflow;overlay.hidden=false;document.body.style.overflow='hidden'}
+ document.getElementById('listingComparisonClose').focus({preventScroll:true});
  const content=document.getElementById('listingComparisonContent'),requestId=++listingComparisonRequest;
  const item={site:button.dataset.site,url:button.dataset.url};
  content.textContent='正在讀取同型號、同面盤商品…';
- if(!dialog.open)dialog.showModal();
  try{
   const response=await fetch('/api/comparisons');
   if(!response.ok)throw Error(response.status===401?'登入已過期，請重新登入':'比價資料讀取失敗，請關閉後重試');
   const data=await response.json();
-  if(requestId!==listingComparisonRequest||!dialog.open)return;
+  if(requestId!==listingComparisonRequest||!listingComparisonIsOpen())return;
   const groups=listingComparisonGroups(data,item);
   const selected=all.find(x=>x.site===item.site&&x.url===item.url);
   content.innerHTML=(selected?'<p><b>'+esc(selected.model||'')+'</b> '+esc(selected.site)+'</p>':'')+'<p class="muted">同型號、同面盤比較；年份、錶況與錶帶可不同，請對照各商品資料。</p>';
@@ -40,9 +69,9 @@ async function openListingComparison(button){
    content.innerHTML+=groups.map(comparisonGroupMarkup).join('');
   }else content.innerHTML+='<p>目前沒有與鐘點站同型號、同面盤且已確認的比價商品。</p>';
   const pending=(data.review_pairs||[]).filter(p=>[p.baseline,p.other].some(x=>x.site===item.site&&x.url===item.url));
-  if(pending.length)content.innerHTML+=`<p class="muted">另有 ${pending.length} 組面盤待確認。<button type="button" onclick="document.getElementById('listingComparisonDialog').close();location.hash='#comparisonReview';showPageTab('comparison');loadComparisons()">查看待確認商品</button></p>`;
+  if(pending.length)content.innerHTML+=`<p class="muted">另有 ${pending.length} 組面盤待確認。<button type="button" onclick="closeListingComparison();location.hash='#comparisonReview';showPageTab('comparison');loadComparisons()">查看待確認商品</button></p>`;
   if(!groups.length&&data.image_pending_count)content.innerHTML+='<p class="muted">部分商品圖片仍在核對中，完成後可重新查看。</p>';
- }catch(error){if(requestId===listingComparisonRequest&&dialog.open)content.textContent=error.message}
+ }catch(error){if(requestId===listingComparisonRequest&&listingComparisonIsOpen())content.textContent=error.message}
 }
 
 // Keep the dialog and comparison page on the same information and card layout.

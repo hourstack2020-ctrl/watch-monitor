@@ -670,7 +670,7 @@ def service_worker():
 
 @app.after_request
 def private_data_cache(response):
-    if request.path=='/' or request.path.startswith('/api/'):
+    if request.path=='/' or request.path.startswith('/api/') or request.path=='/product-comparison.js':
         response.headers['Cache-Control']='private, no-store'
     return response
 
