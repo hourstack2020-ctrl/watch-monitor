@@ -2,15 +2,21 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 from bs4 import BeautifulSoup
-from app import SITES, brand_of, model_of, extract, listing_event_kind, same_product_items
+from app import SITES, brand_of, model_of, extract, listing_event_kind, same_product_items, item_strap, condition_grade
 from dial_images import allowed_url
-from watchstore_source import SITE, ROOT, parse_inventory, pagination
+from watchstore_source import SITE, ROOT, parse_inventory, pagination, parse_details, apply_details
 
 
 def card(pid, title, price):
     return f'''<table width=245><tr><td><a href="prod_detail.asp?prodnum={pid}"><img src="product/{pid}_S.jpg"></a></td></tr>
     <tr><td><table><tr><td><p>{title}</p><p>歡迎來店手錶置換，將以市場最高價收購。</p></td></tr>
     <tr><td>價格：{price}</td></tr><tr><td><a href="prod_detail.asp?prodnum={pid}"><img src="images/detail.jpg"></a></td></tr></table></td></tr></table>'''
+
+
+def specs(strap='蠔式錶帶', condition='9成5新'):
+    return f'''<table><tr><td>錶況：</td><td>全新（其他商品）</td></tr></table>
+    <img src="images/iwatch_standard.jpg"><table><tr><td>錶帶：</td><td>{strap}</td><td>原廠保單/錶盒：</td><td>原廠盒單</td></tr>
+    <tr><td>錶況：</td><td>{condition}</td><td></td><td></td></tr></table>'''
 
 
 class WatchStoreTests(unittest.TestCase):
@@ -59,13 +65,43 @@ class WatchStoreTests(unittest.TestCase):
         class Response:
             apparent_encoding = 'utf-8'
             text = card(1, 'ROLEX 126334 灰色面盤 未使用品', '$390,000')
-        with patch('app.fetch_page', return_value=Response()):
+        detail = Response(); detail.text = specs()
+        with patch('app.fetch_page', side_effect=[Response(), detail]), patch('app.time.sleep'):
             rows, _ = extract(SITE, ROOT, None)
         self.assertEqual(rows[0]['site'], SITE)
+        self.assertEqual(rows[0]['condition'], '9成5新')
         self.assertIsNone(listing_event_kind(None, True))
         self.assertEqual(listing_event_kind(None, False), 'listed')
         self.assertTrue(allowed_url(rows[0]['image_url']))
         self.assertFalse(allowed_url('https://www.watchstore.tw.evil.test/product/1.jpg'))
+
+    def test_detail_fields_override_title_without_mixing_related_products(self):
+        row = self.parse(card(1, 'ROLEX 226627 黑色面盤 2026年保單 二手美品 五株錶帶', '$718,000'))[0]
+        fields = parse_details(BeautifulSoup(specs(), 'html.parser'))
+        row = apply_details(row, fields)
+        self.assertEqual(row['condition'], '9成5新')
+        self.assertEqual(condition_grade(row['condition']), '9.5成新')
+        self.assertEqual(item_strap(row), '三板蠔式鍊帶')
+        self.assertEqual(item_strap(row, normalized=True), '三板蠔式鍊帶')
+        self.assertEqual(apply_details(row, fields)['title'], row['title'])
+
+    def test_raw_strap_is_displayed_without_assuming_steel_means_oyster(self):
+        row = self.parse(card(1, 'ROLEX 126334 灰色面盤 五株錶帶', '$390,000'))[0]
+        row = apply_details(row, {'錶帶': '不鏽鋼錶帶', '錶況': '9成9新'})
+        self.assertEqual(item_strap(row), '不鏽鋼錶帶')
+        self.assertEqual(item_strap(row, normalized=True), '')
+        self.assertEqual(condition_grade(row['condition']), '9.9成新')
+
+    def test_failed_detail_retains_old_record_and_disables_delisting(self):
+        class Response:
+            apparent_encoding = 'utf-8'
+            text = card(1, 'ROLEX 126334 灰色面盤 未使用品', '$390,000')
+        with patch('app.fetch_page', side_effect=[Response(), ValueError('detail unavailable')]), patch('app.time.sleep'):
+            rows, soup = extract(SITE, ROOT, None)
+        self.assertEqual(rows, [])
+        self.assertEqual(len(soup.watchstore_errors), 1)
+        with self.assertRaises(ValueError):
+            parse_details(BeautifulSoup('<td>錶況：9成5新</td>', 'html.parser'))
 
     def test_new_source_participates_in_existing_comparison_rules(self):
         rows = self.parse(card(1, 'ROLEX 126334 藍色面盤 2026年保單 未使用品', '$390,000'))

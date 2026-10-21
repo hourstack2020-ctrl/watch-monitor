@@ -4,6 +4,40 @@ from urllib.parse import urljoin, urlparse, parse_qs
 
 SITE = '名錶窩'
 ROOT = 'https://www.watchstore.tw/'
+STRAP_MARKER = '｜錶帶（內頁）：'
+
+
+def parse_details(soup):
+    """Read labelled specification cells, excluding menus and related products."""
+    header = soup.find('img', src=re.compile(r'(?:^|/)iwatch_standard\.jpg$', re.I))
+    table = header.find_next('table') if header else None
+    if table is None:
+        raise ValueError('WatchStore specification table missing')
+    fields = {}
+    for tr in table.find_all('tr'):
+        cells = tr.find_all('td', recursive=False)
+        for index in range(0, len(cells) - 1, 2):
+            key = re.sub(r'\s+', '', cells[index].get_text('', strip=True)).rstrip('：:')
+            if key not in ('錶帶', '錶況'):
+                continue
+            value = re.sub(r'\s+', ' ', cells[index + 1].get_text(' ', strip=True)).strip()
+            if key in fields and fields[key] != value:
+                raise ValueError('WatchStore conflicting specification: ' + key)
+            fields[key] = value
+    if not all(key in fields for key in ('錶帶', '錶況')):
+        raise ValueError('WatchStore strap or condition label missing')
+    return fields
+
+
+def stored_strap(title):
+    return title.rsplit(STRAP_MARKER, 1)[1] if STRAP_MARKER in title else None
+
+
+def apply_details(item, fields):
+    # Preserve the verbatim condition. The shared grader handles 9成5新/9成9新.
+    title = item['title'].split(STRAP_MARKER, 1)[0]
+    return dict(item, condition=fields['錶況'],
+                title=title + STRAP_MARKER + (fields['錶帶'].replace('｜', '/') or '未提供'))
 
 
 def product_url(raw, page_url):

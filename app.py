@@ -191,6 +191,14 @@ def strap_of(title):
     if re.search(r'副廠|改裝|另附|另贈|替換錶帶|更換錶帶',title):return ''
     return styles[0] if len(set(styles))==1 else ''
 
+def item_strap(item,normalized=False):
+    explicit=watchstore_source.stored_strap(item.get('title') or '') if item.get('site')==watchstore_source.SITE else None
+    if explicit is not None:
+        # Detail fields take priority over shorthand strap descriptions in titles.
+        canonical=strap_of(explicit)
+        return canonical if normalized else (canonical or (explicit if explicit!='未提供' else ''))
+    return strap_of(item.get('title') or '')
+
 # User-confirmed dial colours apply only to these exact listings, not every 126334.
 CONFIRMED_DIAL_COLORS = {
     ('鐘點站','www.hourstack.com.tw','18351'): '銀',
@@ -228,7 +236,7 @@ def item_dial_color(item):
 def comparison_attributes(item):
     title=item.get('title') or ''
     years=set(re.findall(r'(20\d{2})\s*年\s*(?:(?:新式|木紋|電子)\s*)*(?:保卡|保單|保證書)',title))
-    return item_dial_color(item),(next(iter(years)) if len(years)==1 else ''),strap_of(title)
+    return item_dial_color(item),(next(iter(years)) if len(years)==1 else ''),item_strap(item,normalized=True)
 
 def comparison_key(item):
     brand=brand_of(item['title'])
@@ -283,7 +291,7 @@ def same_product_items(rows,image_evidence=None,review_decisions=None):
         visual=visual_bucket(row,image_evidence)
         if visual is None:continue
         key=(brand,normalized,dial)+visual
-        grouped.setdefault(key,[]).append(dict(row,strap=strap_of(row['title'])))
+        grouped.setdefault(key,[]).append(dict(row,strap=item_strap(row)))
         if row['site']==BASELINE_SITE:baseline.setdefault(key,[]).append(row)
         else:competitors.append((key,row))
     items=[]
@@ -291,7 +299,7 @@ def same_product_items(rows,image_evidence=None,review_decisions=None):
         for own in baseline.get(key,[]):
             difference=own['price']-row['price']
             items.append({'brand':key[0],'model':model_of(row['title']),'dial_color':key[2],
-                'competitor':dict(row,strap=strap_of(row['title'])),'baseline':dict(own,strap=strap_of(own['title'])),
+                'competitor':dict(row,strap=item_strap(row)),'baseline':dict(own,strap=item_strap(own)),
                 'difference':difference,'difference_percent':round(100*difference/own['price'],1)})
     groups=[]
     for key,listings in grouped.items():
@@ -494,7 +502,18 @@ def extract(site,url,session):
     r=fetch_page(session,url);r.encoding=r.apparent_encoding
     soup=BeautifulSoup(r.text,'html.parser')
     if site==watchstore_source.SITE:
-        return watchstore_source.parse_inventory(soup,url,brand_of,model_of),soup
+        rows=watchstore_source.parse_inventory(soup,url,brand_of,model_of)
+        enriched=[];soup.watchstore_errors=[]
+        for item in rows:
+            try:
+                detail=fetch_page(session,item['url']);detail.encoding=detail.apparent_encoding
+                fields=watchstore_source.parse_details(BeautifulSoup(detail.text,'html.parser'))
+                enriched.append(watchstore_source.apply_details(item,fields))
+            except Exception as exc:
+                # Retain the old record rather than replacing trusted details with title guesses.
+                soup.watchstore_errors.append(f"{item['url']}: {str(exc)[:120]}")
+            time.sleep(float(os.getenv('CRAWL_DELAY_SECONDS','2')))
+        return enriched,soup
     images=product_images(soup,url)
     for x in soup(['script','style','noscript']):x.decompose()
     results={}
@@ -580,6 +599,7 @@ def _crawl():
                 try:rows,soup=extract(site,url,session)
                 except Exception as e:
                     site_errors.append(f'{url}: {str(e)[:120]}');continue
+                if site==watchstore_source.SITE:site_errors.extend(soup.watchstore_errors)
                 if site==watchstore_source.SITE and rows and all(x['url'] in seen for x in rows):
                     site_errors.append(f'{url}: repeated inventory page; coverage is incomplete');continue
                 now=datetime.now(timezone.utc)
@@ -686,7 +706,8 @@ def market_script():
 def watches():
     with connect() as c:
         rows=c.execute("SELECT site,url,title,brand,model,year,condition,price,price_text,updated,status,image_url,source_order,price_changed_at,missing_runs,(SELECT e.detected_at FROM listing_events e WHERE e.site=watches.site AND e.url=watches.url AND e.event_type='listed' ORDER BY e.detected_at LIMIT 1) AS listed_at,GREATEST(activity_at,price_changed_at,first_seen,(SELECT max(e.detected_at) FROM listing_events e WHERE e.site=watches.site AND e.url=watches.url AND e.event_type IN ('listed','returned'))) AS last_activity_at,(SELECT h.price FROM history h WHERE h.site=watches.site AND h.url=watches.url AND h.price IS NOT NULL AND h.price<>watches.price ORDER BY h.checked DESC,h.id DESC LIMIT 1) AS previous_price,(SELECT COALESCE(jsonb_agg(jsonb_build_object('old_price',p.old_price,'price',p.price,'checked',p.checked) ORDER BY p.checked DESC,p.id DESC),'[]'::jsonb) FROM (SELECT h.id,h.price,h.checked,lag(h.price) OVER (ORDER BY h.checked,h.id) AS old_price FROM history h WHERE h.site=watches.site AND h.url=watches.url) p WHERE p.old_price IS NOT NULL AND p.price IS NOT NULL AND p.old_price<>p.price) AS price_changes FROM watches ORDER BY price_changed_at DESC NULLS LAST,CASE site WHEN '鐘點站' THEN 0 WHEN '永生' THEN 1 WHEN '玩錶舍' THEN 2 WHEN '雷達站' THEN 3 ELSE 4 END,source_order NULLS LAST,url LIMIT 20000").fetchall()
-    return jsonify([dict(zip(['site','url','title','brand','model','year','condition','price','price_text','updated','status','image_url','source_order','price_changed_at','missing_runs','listed_at','last_activity_at','previous_price','price_changes'],[v.isoformat() if isinstance(v,datetime) else v for v in r])) for r in rows])
+    items=[dict(zip(['site','url','title','brand','model','year','condition','price','price_text','updated','status','image_url','source_order','price_changed_at','missing_runs','listed_at','last_activity_at','previous_price','price_changes'],[v.isoformat() if isinstance(v,datetime) else v for v in r])) for r in rows]
+    return jsonify([dict(x,strap=item_strap(x)) for x in items])
 
 @app.get('/api/status')
 @protected
