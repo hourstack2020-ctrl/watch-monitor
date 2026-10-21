@@ -51,3 +51,20 @@ class ComparisonPushTests(unittest.TestCase):
             self.assertEqual(run()['sent'],0)
             self.assertEqual(send.call_count,2)
             self.assertEqual(send.call_args.args[1]['url'],'/#comparisonSection')
+
+    def test_metadata_change_notifies_but_polling_does_not(self):
+        original=group();original['listings'][1]['activity_at']='2026-10-21T05:22:29Z'
+        before,_=push.comparison_snapshot([original])
+        changed=copy.deepcopy(original);changed['listings'][1]['activity_at']='2026-10-21T07:22:29Z'
+        after,details=push.comparison_snapshot([changed])
+        self.assertEqual(len(push.comparison_updates(before,after,details)),1)
+        polled=copy.deepcopy(changed);polled['listings'][1]['updated']='2026-10-21T08:22:29Z'
+        current,details=push.comparison_snapshot([polled])
+        self.assertEqual(push.comparison_updates(after,current,details),[])
+
+    def test_legacy_snapshot_upgrade_silent_unless_price_changes(self):
+        current,details=push.comparison_snapshot([group()])
+        legacy={key:{identity:value[0] for identity,value in entries.items()} for key,entries in current.items()}
+        self.assertEqual(push.comparison_updates(legacy,current,details),[])
+        changed,details=push.comparison_snapshot([group(125)])
+        self.assertEqual(len(push.comparison_updates(legacy,changed,details)),1)
