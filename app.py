@@ -424,8 +424,8 @@ def analyse_current_dials(wait_for_crawl=False):
 
 def current_comparison_groups():
     with connect() as c:
-        fields=['site','url','title','brand','model','year','condition','price','image_url','updated','status','missing_runs']
-        rows=[dict(zip(fields,r)) for r in c.execute('SELECT site,url,title,brand,model,year,condition,price,image_url,updated,status,missing_runs FROM watches WHERE price>0 AND missing_runs=0').fetchall()]
+        fields=['site','url','title','brand','model','year','condition','price','image_url','updated','status','missing_runs','activity_at']
+        rows=[dict(zip(fields,r)) for r in c.execute('SELECT site,url,title,brand,model,year,condition,price,image_url,updated,status,missing_runs,activity_at FROM watches WHERE price>0 AND missing_runs=0').fetchall()]
         evidence=dial_images.load_evidence(c,rows)
         decisions=comparison_reviews.load_decisions(c)
     return same_product_items(rows,evidence,decisions)
