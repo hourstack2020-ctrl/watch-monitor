@@ -727,6 +727,10 @@ def comparisons():
         decisions=comparison_reviews.load_decisions(c)
     return jsonify(same_product_items(rows,evidence,decisions))
 
+@app.get('/product-comparison.js')
+@protected
+def product_comparison_script():return send_file('product-comparison.js')
+
 @app.get('/comparison-reviews.js')
 @protected
 def comparison_review_script():return send_file('comparison_reviews.js')
