@@ -684,7 +684,7 @@ def service_worker():
 
 @app.after_request
 def private_data_cache(response):
-    if request.path=='/' or request.path.startswith('/api/') or request.path=='/product-comparison.js':
+    if request.path=='/' or request.path.startswith('/api/') or request.path=='/comparison-display.js':
         response.headers['Cache-Control']='private, no-store'
     return response
 
@@ -743,9 +743,9 @@ def comparisons():
     result['rules']='同品牌、同型號、同面盤；錶圈文字或圖片任一相符。年份、錶況、錶帶差異另外標示。'
     return jsonify(result)
 
-@app.get('/product-comparison.js')
+@app.get('/comparison-display.js')
 @protected
-def product_comparison_script():return send_file('product-comparison.js')
+def comparison_display_script():return send_file('comparison-display.js')
 
 @app.get('/comparison-reviews.js')
 @protected
