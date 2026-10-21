@@ -221,6 +221,19 @@ def item_dial_color(item):
         and not dial_color_of(title)
         and not re.search(r'熊貓|(?:白|銀|金|灰|藍|綠|紅|粉|紫|黃|棕)(?:色)?(?:面盤|錶盤|錶面)|隕石|貝殼|漸層|彩色',title)):
         return '黑／小錶盤黑色／計時圈銀色'
+    # These exact source photos were visually checked: the dial is black,
+    # while the titles describe only the black/grey bezel. Never infer dial
+    # colour from bezel wording or apply this to other photos of the reference.
+    confirmed_grnr_photos={
+        ('鐘點站','www.hourstack.com.tw'): 'https://www.hourstack.com.tw/product/product_big/384EB9E8-4348-4CCA-9B89-687E2F1FD0C6.JPG',
+        ('雷達站','www.rdwatch.com.tw'): 'https://www.rdwatch.com.tw/product/product_big/19471-325.JPG',
+    }
+    if (model_of(title)=='126710GRNR' and parsed.path.lower()=='/product_open.asp'
+        and (item.get('site'),parsed.hostname) in confirmed_grnr_photos
+        and item.get('image_url')==confirmed_grnr_photos[(item.get('site'),parsed.hostname)]
+        and not dial_color_of(title)
+        and not re.search(r'改裝|副廠|後鑲|鑽(?:石)?面|滿天星|隕石|貝殼|彩色|鏤空|漸層|漸變|(?:黑|白|灰|銀|綠|藍|紅|金|粉|紫|黃|棕)(?:色)?(?:面盤|錶盤|錶面)',title)):
+        return '黑'
     # Exact listing colour verified from the user's photo; leave source text untouched.
     if (item.get('site'),parsed.hostname,listing_id)==('鐘點站','www.hourstack.com.tw','18767') and parsed.path.lower()=='/product_open.asp' and model_of(title)=='126000' and '126000 綠色面盤' in title:
         return dial_color_of(title.replace('126000 綠色面盤','126000 深綠色面盤',1))
