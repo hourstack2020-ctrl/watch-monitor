@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 from functools import wraps
 from flask import Flask, request, jsonify, Response, send_file, session
 import comparison_reviews
+import official_references
 import bezel_checks
 import dial_images
 import watchstore_source
@@ -93,6 +94,12 @@ def model_of(t):
 def dial_color_of(title):
     source_reference=model_of(title)
     title=re.sub(r'\s+','',title)
+    # Official 4962/200R-010 specification identifies this exact zebra motif;
+    # the gradient in sellers' text describes the gem-set case, not the dial.
+    if (source_reference=='4962/200R-010' and re.search(r'PATEKPHILIPPE|百達翡麗',title,re.I)
+        and re.search(r'斑馬(?:紋飾|紋|圖案)(?:面盤|錶盤|錶面)',title)
+        and not re.search(r'改裝|副廠|後鑲|改鑲',title)):
+        return '斑馬紋'
     # This exact CODE 11.59 reference is described as smoky grey in both
     # verified listings; the dial noun and sunburst wording may be omitted.
     if (source_reference=='15210CR.OO.A002CR.01' and re.search(r'CODE11[.]59',title,re.I)
@@ -360,18 +367,18 @@ def reviewed_comparisons(rows,evidence,decisions):
                 states[(b['url'],o['site'],o['url'])]=value
                 key,choice,reason=value
                 if choice in ('pending','analysing'):waiting.add(key)
-                if choice=='rejected':continue
+                if choice not in ('automatic','approved'):continue
                 difference=b['price']-o['price']
                 items.append(dict(brand=source['brand'],model=model_of(o['title']),dial_color=dial,
                     competitor=o,baseline=b,difference=difference,difference_percent=round(100*difference/b['price'],1),manual_review=choice=='approved',bezel_match=bezel_checks.match(b,o,evidence)))
         clusters=[]
         for b in clocks:
-            matches=[o for o in others if state(b,o) != 'rejected']
+            matches=[o for o in others if state(b,o) in ('automatic','approved')]
             if not matches:continue
             cluster=[b]+matches
             for i,previous in enumerate(clusters):
                 merged=list({(x['site'],x['url']):x for x in previous+cluster}.values())
-                if all(state(cb,co) != 'rejected' for cb in merged if cb['site']==BASELINE_SITE for co in merged if co['site']!=BASELINE_SITE):
+                if all(state(cb,co) in ('automatic','approved') for cb in merged if cb['site']==BASELINE_SITE for co in merged if co['site']!=BASELINE_SITE):
                     clusters[i]=merged;break
             else:clusters.append(cluster)
         for listings in clusters:
@@ -382,7 +389,7 @@ def reviewed_comparisons(rows,evidence,decisions):
                 store_count=len({x['site'] for x in listings}),listing_count=len(listings),minimum_price=minimum,
                 unverified_count=sum(state(b,o) in ('pending','analysing') for b in listings if b['site']==BASELINE_SITE for o in listings if o['site']!=BASELINE_SITE),
                 maximum_price=maximum,spread=maximum-minimum,manual_review_count=manual,
-                listings=[dict(x,**bezel_checks.listing_info(x,listings,evidence),comparison_note=('辨識資料待核對' if any(state(b,o) in ('pending','analysing') for b in listings if b['site']==BASELINE_SITE for o in listings if o['site']!=BASELINE_SITE and (x['site'],x['url']) in ((b['site'],b['url']),(o['site'],o['url']))) else ''),difference_from_lowest=x['price']-minimum,difference_percent=round(100*(x['price']-minimum)/minimum,1)) for x in listings]))
+                listings=[dict(x,**dict(bezel_checks.listing_info(x,listings,evidence),**official_references.listing_info(x,listings,source['model'],dial,evidence)),comparison_note=('辨識資料待核對' if any(state(b,o) in ('pending','analysing') for b in listings if b['site']==BASELINE_SITE for o in listings if o['site']!=BASELINE_SITE and (x['site'],x['url']) in ((b['site'],b['url']),(o['site'],o['url']))) else ''),difference_from_lowest=x['price']-minimum,difference_percent=round(100*(x['price']-minimum)/minimum,1)) for x in listings]))
     return dict(baseline_models=raw['baseline_models'],image_checked=True,image_review=list(review_items.values()),
         review_pairs=[],image_pending_count=len(waiting),
         items=sorted(items,key=lambda x:(-x['difference'],x['model'],x['competitor']['url'],x['baseline']['url'])),
@@ -430,7 +437,10 @@ def analyse_current_dials(wait_for_crawl=False):
     with connect() as c:
         fields=['site','url','title','price','image_url','missing_runs','status','brand','model','year','condition']
         rows=[dict(zip(fields,r)) for r in c.execute("SELECT site,url,title,price,image_url,missing_runs,status,brand,model,year,condition FROM watches WHERE price>0 AND missing_runs=0").fetchall()]
-    count=dial_images.refresh_images(connect,image_comparison_candidates(rows))
+    candidates=image_comparison_candidates(rows)
+    official_count=official_references.refresh(connect,[dict(x,official_model=model_of(x['title']),official_dial=item_dial_color(x)) for x in candidates])
+    logging.info('Official reference pages checked: %d',official_count)
+    count=dial_images.refresh_images(connect,candidates)
     with connect() as c:
         evidence=dial_images.load_evidence(c,rows)
         decisions=comparison_reviews.load_decisions(c)
@@ -744,7 +754,7 @@ def comparisons():
         evidence=dial_images.load_evidence(c,rows)
         decisions=comparison_reviews.load_decisions(c)
     result=same_product_items(rows,evidence,decisions)
-    result['rules']='同品牌、同型號、同面盤；錶圈文字或圖片任一相符。年份、錶況、錶帶差異另外標示。'
+    result['rules']='同品牌、同型號、同面盤；錶圈以文字、圖片或官方規格核對。有疑義的配對先查官網，核實後才列入。年份、錶況、錶帶差異另外標示。'
     return jsonify(result)
 
 @app.get('/comparison-display.js')
@@ -933,4 +943,5 @@ if __name__=='__main__':
 # One background cache fill on web startup; advisory lock prevents duplicate workers.
 if __name__=='app' and os.environ.get('DATABASE_URL'):
     subprocess.Popen([sys.executable,os.path.abspath(__file__),'analyze-dials'],cwd=app.root_path)
+
 
