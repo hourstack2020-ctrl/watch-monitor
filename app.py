@@ -124,6 +124,12 @@ def dial_color_of(title):
         ref=source_reference
         if ref in {'126610LN','116610LN','126613LN','116613LN','124060','114060'} and '黑水鬼' in title:
             found.add('黑')
+        # In the confirmed 126613LB listings, 藍水鬼 names the blue dial;
+        # the source often omits a separate 面盤 field. Do not extend this
+        # nickname to other references or modified/special dials.
+        if (ref=='126613LB' and '藍水鬼' in title
+            and not re.search(r'改裝|副廠|後鑲|隕石|貝殼|滿天星|鑽(?:石)?面|彩色|鏤空',title)):
+            found.add('藍')
         if re.search(r'DATEJUST|日誌',title,re.I):
             found.update(re.findall(r'(白|黑|銀|藍|灰|粉紅)羅馬',title))
             for name in ('薄荷綠','開心果綠','牛油果綠','煙燻綠','煙燻藍','煙燻灰'):
