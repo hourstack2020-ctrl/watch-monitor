@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit, urljoin
 import cv2
 import bezel_checks
+import official_references
 import numpy as np
 import requests
 from PIL import Image
@@ -144,8 +145,9 @@ def analyse_with_visual_review(data,previous=None):
 
 def load_evidence(connection,rows):
     urls=list({r.get('image_url') for r in rows if r.get('image_url')})
-    if not urls:return {}
-    return {url:result for url,result in connection.execute("SELECT image_url,result FROM dial_image_analysis WHERE analyzer_version=%s AND image_url=ANY(%s) AND checked_at>=now()-interval '7 days'",(VERSION,urls)).fetchall()}
+    images={url:result for url,result in connection.execute("SELECT image_url,result FROM dial_image_analysis WHERE analyzer_version=%s AND image_url=ANY(%s) AND checked_at>=now()-interval '7 days'",(VERSION,urls)).fetchall()} if urls else {}
+    images['__official__']=official_references.load_checks(connection)
+    return images
 
 def assessment(row,dial,evidence):
     r=evidence.get(row.get('image_url')) or {}
@@ -206,4 +208,5 @@ def refresh_images(connect,rows,limit=120):
                     count+=1;time.sleep(1)
             return count
         finally:lock.execute('SELECT pg_advisory_unlock(68234018)')
+
 
