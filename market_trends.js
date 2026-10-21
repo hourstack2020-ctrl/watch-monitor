@@ -79,6 +79,19 @@ function marketLatestInfo(item){
  if(item.previous_price!=null&&Number(item.price)!==Number(item.previous_price))latest=item.date||latest;
  return Date.parse(latest+'T00:00:00Z')||0;
 }
+function marketChangePercent(item){
+ const previous=Number(item.previous_price),price=Number(item.price);
+ return item.previous_price==null||item.price==null||!Number.isFinite(previous)||previous<=0||!Number.isFinite(price)?null:(price-previous)/previous*100;
+}
+function compareMarketRows(a,b,order,sort){
+ if(sort==='percent_desc'||sort==='percent_asc'){
+  const left=marketChangePercent(a),right=marketChangePercent(b);
+  if(left===null&&right!==null)return 1;
+  if(right===null&&left!==null)return -1;
+  if(left!==null&&right!==null&&left!==right)return sort==='percent_desc'?right-left:left-right;
+ }
+ return compareMarketInfo(a,b,order);
+}
 function compareMarketInfo(a,b,order){
  return marketLatestInfo(b)-marketLatestInfo(a)
   ||order.indexOf(a.brand)-order.indexOf(b.brand)
@@ -91,7 +104,7 @@ function renderMarketTrends(reset=true){
  const brand=$('marketBrand').value,series=$('marketSeries').value,q=$('marketSearch').value.trim().toLowerCase(),days=Number($('marketDays').value);
  const order=marketData.brands;
  let rows=marketData.items.filter(x=>marketSeriesAllowed(x.brand,x.series)&&(!brand||x.brand===brand)&&(!series||x.series===series)&&(!q||[x.title,x.model,x.series].join(' ').toLowerCase().includes(q)));
- rows.sort((a,b)=>compareMarketInfo(a,b,order));
+ rows.sort((a,b)=>compareMarketRows(a,b,order,$('marketSort').value));
  $('marketCount').textContent=rows.length+' 件';
  const cutoff=Date.parse((marketData.date||'2000-01-01')+'T00:00:00Z')-(days-1)*86400000;
  let heading='';
