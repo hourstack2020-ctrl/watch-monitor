@@ -15,6 +15,21 @@ function listingComparisonButton(item){return `<button type="button" class="list
 function listingComparisonGroups(data,item){
  return (data.groups||[]).filter(g=>g.listings.some(x=>x.site===item.site&&x.url===item.url)&&g.listings.some(x=>x.site==='鐘點站'));
 }
+// One in-memory snapshot is shared by the page and popup. No private data is
+// saved to device storage. Concurrent loads share the same request.
+let comparisonSnapshot=null,comparisonSnapshotPending=null;
+function readComparisonSnapshot(refresh=false){
+ if(!refresh&&comparisonSnapshot)return Promise.resolve(comparisonSnapshot);
+ if(comparisonSnapshotPending)return comparisonSnapshotPending;
+ comparisonSnapshotPending=(async()=>{
+  const response=await fetch('/api/comparisons');
+  if(!response.ok)throw Error(response.status===401?'登入已過期，請重新登入':'比價資料讀取失敗，請稍後重試');
+  const data=await response.json();
+  if(!Array.isArray(data.groups))throw Error('比價功能更新中，請稍後重新整理');
+  comparisonSnapshot=data;return data;
+ })().finally(()=>{comparisonSnapshotPending=null});
+ return comparisonSnapshotPending;
+}
 let listingComparisonRequest=0,listingComparisonFocus=null,listingComparisonOverflow='';
 function closeListingComparison(){
  const overlay=document.getElementById('listingComparisonOverlay');
@@ -56,11 +71,9 @@ async function openListingComparison(button){
  document.getElementById('listingComparisonClose').focus({preventScroll:true});
  const content=document.getElementById('listingComparisonContent'),requestId=++listingComparisonRequest;
  const item={site:button.dataset.site,url:button.dataset.url};
- content.textContent='正在讀取同型號、同面盤商品…';
+ if(!comparisonSnapshot)content.textContent='首次載入比較資料…';
  try{
-  const response=await fetch('/api/comparisons');
-  if(!response.ok)throw Error(response.status===401?'登入已過期，請重新登入':'比價資料讀取失敗，請關閉後重試');
-  const data=await response.json();
+  const data=comparisonSnapshot||await readComparisonSnapshot();
   if(requestId!==listingComparisonRequest||!listingComparisonIsOpen())return;
   const groups=listingComparisonGroups(data,item);
   const selected=all.find(x=>x.site===item.site&&x.url===item.url);
