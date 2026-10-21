@@ -336,7 +336,7 @@ def same_product_items(rows,image_evidence=None,review_decisions=None):
 
 def reviewed_comparisons(rows,evidence,decisions):
     raw=same_product_items(rows)
-    groups,items,pending,waiting=[],[],[],set()
+    groups,items,waiting=[],[],set()
     review_items={}
     for x in image_comparison_candidates(rows):
         result=dial_images.assessment(x,item_dial_color(x),evidence)
@@ -353,20 +353,19 @@ def reviewed_comparisons(rows,evidence,decisions):
                 value=comparison_reviews.pair_state(b,o,dial,model_of(b['title']),evidence,decisions)
                 states[(b['url'],o['site'],o['url'])]=value
                 key,choice,reason=value
-                if choice=='pending':pending.append(comparison_reviews.review_details(key,b,o,dial,model_of(b['title']),reason))
-                if choice=='analysing':waiting.add(key)
-                if choice not in ('automatic','approved'):continue
+                if choice in ('pending','analysing'):waiting.add(key)
+                if choice=='rejected':continue
                 difference=b['price']-o['price']
                 items.append(dict(brand=source['brand'],model=model_of(o['title']),dial_color=dial,
                     competitor=o,baseline=b,difference=difference,difference_percent=round(100*difference/b['price'],1),manual_review=choice=='approved',bezel_match=bezel_checks.match(b,o,evidence)))
         clusters=[]
         for b in clocks:
-            matches=[o for o in others if state(b,o) in ('automatic','approved')]
+            matches=[o for o in others if state(b,o) != 'rejected']
             if not matches:continue
             cluster=[b]+matches
             for i,previous in enumerate(clusters):
                 merged=list({(x['site'],x['url']):x for x in previous+cluster}.values())
-                if all(state(cb,co) in ('automatic','approved') for cb in merged if cb['site']==BASELINE_SITE for co in merged if co['site']!=BASELINE_SITE):
+                if all(state(cb,co) != 'rejected' for cb in merged if cb['site']==BASELINE_SITE for co in merged if co['site']!=BASELINE_SITE):
                     clusters[i]=merged;break
             else:clusters.append(cluster)
         for listings in clusters:
@@ -375,10 +374,11 @@ def reviewed_comparisons(rows,evidence,decisions):
             manual=sum(state(b,o)=='approved' for b in listings if b['site']==BASELINE_SITE for o in listings if o['site']!=BASELINE_SITE)
             groups.append(dict(brand=source['brand'],model=source['model'],dial_color=dial,
                 store_count=len({x['site'] for x in listings}),listing_count=len(listings),minimum_price=minimum,
+                unverified_count=sum(state(b,o) in ('pending','analysing') for b in listings if b['site']==BASELINE_SITE for o in listings if o['site']!=BASELINE_SITE),
                 maximum_price=maximum,spread=maximum-minimum,manual_review_count=manual,
-                listings=[dict(x,**bezel_checks.listing_info(x,listings,evidence),difference_from_lowest=x['price']-minimum,difference_percent=round(100*(x['price']-minimum)/minimum,1)) for x in listings]))
+                listings=[dict(x,**bezel_checks.listing_info(x,listings,evidence),comparison_note=('辨識資料待核對' if any(state(b,o) in ('pending','analysing') for b in listings if b['site']==BASELINE_SITE for o in listings if o['site']!=BASELINE_SITE and (x['site'],x['url']) in ((b['site'],b['url']),(o['site'],o['url']))) else ''),difference_from_lowest=x['price']-minimum,difference_percent=round(100*(x['price']-minimum)/minimum,1)) for x in listings]))
     return dict(baseline_models=raw['baseline_models'],image_checked=True,image_review=list(review_items.values()),
-        review_pairs=sorted(pending,key=lambda x:(x['model'],x['other']['site'],x['pair_key'])),image_pending_count=len(waiting),
+        review_pairs=[],image_pending_count=len(waiting),
         items=sorted(items,key=lambda x:(-x['difference'],x['model'],x['competitor']['url'],x['baseline']['url'])),
         groups=sorted(groups,key=lambda g:(-g['spread'],g['brand'],g['model'],g['dial_color'])))
 
@@ -429,9 +429,7 @@ def analyse_current_dials(wait_for_crawl=False):
         evidence=dial_images.load_evidence(c,rows)
         decisions=comparison_reviews.load_decisions(c)
     result=same_product_items(rows,evidence,decisions)
-    comparison_reviews.sync_pending(connect,result['review_pairs'])
-    notifications=comparison_reviews.notify_pending(connect)
-    logging.info('Dial images checked: %d; review pairs: %d; review notifications sent: %d, failed: %d',count,len(result['review_pairs']),notifications['sent'],notifications['failed'])
+    logging.info('Dial images checked: %d; comparisons displayed automatically: %d',count,len(result['groups']))
     notify_comparison_changes()
     return count
 

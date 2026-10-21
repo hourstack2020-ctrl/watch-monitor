@@ -29,5 +29,7 @@ class ImageComparisonAPI(unittest.TestCase):
         self.assertEqual(d['groups'][0]['listings'][0]['bezel_method'],'文字')
     def test_unchecked_images_listed_for_review(self):
         r=self.response({});self.assertEqual(r.status_code,200)
-        d=r.get_json();self.assertEqual(d['groups'],[]);self.assertEqual(len(d['image_review']),2)
+        d=r.get_json();self.assertEqual(len(d['groups']),1);self.assertEqual(len(d['image_review']),2)
+        self.assertEqual(d['review_pairs'],[])
+        self.assertEqual(d['groups'][0]['unverified_count'],1)
 if __name__=='__main__':unittest.main()

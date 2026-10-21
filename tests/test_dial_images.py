@@ -23,10 +23,13 @@ class DialImageChecks(unittest.TestCase):
         self.assertEqual(assessment(row,'綠',{'image':image})['status'],'conflict')
     def test_missing_image_never_auto_verifies(self):
         self.assertEqual(assessment({'image_url':''},'綠',{})['status'],'review')
-    def test_visual_green_tones_do_not_merge(self):
+    def test_visual_green_tones_display_with_uncertainty_note(self):
         rows=[dict(site=site,url=site,title='ROLEX 126000 綠色面盤',price=1,image_url=site) for site in ['鐘點站','永生']]
         images={'鐘點站':{'status':'analysed','family':'green','tone':'dark'},'永生':{'status':'analysed','family':'green','tone':'light'}}
-        self.assertEqual(same_product_items(rows,images)['groups'],[])
+        result=same_product_items(rows,images)
+        self.assertEqual(len(result['groups']),1)
+        self.assertEqual(result['groups'][0]['unverified_count'],1)
+        self.assertEqual(result['review_pairs'],[])
     def test_low_price_alert_requires_image_evidence(self):
         rows=[dict(site=site,url=site,title='ROLEX 126000 綠色面盤 2026年保卡 五株錶帶 光滑錶圈',price=price,image_url=site) for site,price in [('鐘點站',200),('永生',100)]]
         self.assertEqual(lower_price_items(rows,{})['items'],[])

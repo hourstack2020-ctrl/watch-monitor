@@ -10,9 +10,11 @@ class ComparisonReviews(unittest.TestCase):
         self.o=dict(site='永生',url='other',image_url='other.jpg',title='ROLEX 126000 綠色面盤 2026年保卡 五株錶帶 光滑錶圈',price=100)
         self.e={'clock.jpg':{'status':'review','reason':'面盤反光'},'other.jpg':{'status':'analysed','family':'green','tone':'light','sha256':'hash'}}
         self.key=reviews.review_key(self.b,self.o,'綠','126000',self.e)
-    def test_uncertain_pair_asks_for_review(self):
+    def test_uncertain_pair_displays_without_asking(self):
         d=monitor.same_product_items([self.b,self.o],self.e,{})
-        self.assertEqual(d['groups'],[]);self.assertEqual(len(d['review_pairs']),1)
+        self.assertEqual(len(d['groups']),1);self.assertEqual(d['review_pairs'],[])
+        self.assertEqual(d['groups'][0]['unverified_count'],1)
+        self.assertTrue(all(x['comparison_note'] for x in d['groups'][0]['listings']))
     def test_approve_keeps_exact_pair(self):
         d=monitor.same_product_items([self.b,self.o],self.e,{self.key:'approved'})
         self.assertEqual(len(d['groups']),1);self.assertEqual(d['groups'][0]['manual_review_count'],1)

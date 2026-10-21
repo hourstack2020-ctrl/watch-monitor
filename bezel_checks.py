@@ -81,7 +81,7 @@ def listing_info(row,listings,evidence):
     partners=[x for x in listings if (x.get('site')=='鐘點站')!=(row.get('site')=='鐘點站')]
     checks=[match(row,x,evidence) for x in partners]
     methods=sorted({x['method'] for x in checks if x['matched']})
-    method='／'.join(methods) if methods else '使用者確認'
+    method='／'.join(methods) if methods else '未辨識'
     label=text_label(row)
     if label=='未辨識' and any('圖片' in x for x in methods):label='圖片已確認'
     return {'bezel':label,'bezel_method':method}
