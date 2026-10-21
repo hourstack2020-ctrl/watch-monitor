@@ -11,7 +11,7 @@ import requests
 from PIL import Image
 
 VERSION=1
-HOSTS={'www.hourstack.com.tw','hourstack.com.tw','www.egps.com.tw','egps.com.tw','www.playwatch.com.tw','playwatch.com.tw','www.rdwatch.com.tw','rdwatch.com.tw'}
+HOSTS={'www.hourstack.com.tw','hourstack.com.tw','www.egps.com.tw','egps.com.tw','www.playwatch.com.tw','playwatch.com.tw','www.rdwatch.com.tw','rdwatch.com.tw','www.watchstore.tw','watchstore.tw'}
 cv2.setNumThreads(1)
 
 def allowed_url(url):

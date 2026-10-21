@@ -91,7 +91,7 @@ def notify_market_events(connect):
         with connect() as c:
             initialize_event_cursor(c,sid)
             ceiling=c.execute('SELECT COALESCE((SELECT max(id) FROM listing_events),0),COALESCE((SELECT max(id) FROM history),0)').fetchone()
-        for site in ['永生','玩錶舍','雷達站']:
+        for site in ['永生','玩錶舍','雷達站','名錶窩']:
             with connect() as c:
                 c.execute("""INSERT INTO push_market_cursor(subscription_id,site,listing_id,history_id)
                     SELECT subscription_id,%s,listing_id,history_id FROM push_event_cursor WHERE subscription_id=%s
