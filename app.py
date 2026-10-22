@@ -369,22 +369,22 @@ def reviewed_comparisons(rows,evidence,decisions):
             for o in others:
                 value=comparison_reviews.pair_state(b,o,dial,model_of(b['title']),evidence,decisions)
                 if value[1]!='rejected' and (not item_dial_color(b) or not item_dial_color(o)):
-                    value=(value[0],'pending','面盤文字資料不足，列入比價並待圖片或官方規格核對')
+                    value=(value[0],'pending','面盤文字資料不足，等待圖片或官方規格核對')
                 states[(b['url'],o['site'],o['url'])]=value
                 key,choice,reason=value
                 if choice in ('pending','analysing'):waiting.add(key)
-                if choice=='rejected':continue
+                if choice not in ('automatic','approved'):continue
                 difference=b['price']-o['price']
                 items.append(dict(brand=source['brand'],model=model_of(o['title']),dial_color=dial,
                     competitor=o,baseline=b,difference=difference,difference_percent=round(100*difference/b['price'],1),manual_review=choice=='approved',bezel_match=bezel_checks.match(b,o,evidence)))
         clusters=[]
         for b in clocks:
-            matches=[o for o in others if state(b,o)!='rejected']
+            matches=[o for o in others if state(b,o) in ('automatic','approved')]
             if not matches:continue
             cluster=[b]+matches
             for i,previous in enumerate(clusters):
                 merged=list({(x['site'],x['url']):x for x in previous+cluster}.values())
-                if all(state(cb,co)!='rejected' for cb in merged if cb['site']==BASELINE_SITE for co in merged if co['site']!=BASELINE_SITE):
+                if all(state(cb,co) in ('automatic','approved') for cb in merged if cb['site']==BASELINE_SITE for co in merged if co['site']!=BASELINE_SITE):
                     clusters[i]=merged;break
             else:clusters.append(cluster)
         def listing_verification(row,listings):
@@ -937,6 +937,7 @@ if __name__=='__main__':
 # One background cache fill on web startup; advisory lock prevents duplicate workers.
 if __name__=='app' and os.environ.get('DATABASE_URL'):
     subprocess.Popen([sys.executable,os.path.abspath(__file__),'analyze-dials'],cwd=app.root_path)
+
 
 
 
