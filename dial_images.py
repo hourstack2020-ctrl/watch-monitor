@@ -15,7 +15,7 @@ from PIL import Image
 
 VERSION=1
 FEATURE_VERSION=2
-HOSTS={'www.hourstack.com.tw','hourstack.com.tw','www.egps.com.tw','egps.com.tw','www.playwatch.com.tw','playwatch.com.tw','www.rdwatch.com.tw','rdwatch.com.tw','www.watchstore.tw','watchstore.tw'}
+HOSTS={'www.hourstack.com.tw','hourstack.com.tw','www.egps.com.tw','egps.com.tw','www.playwatch.com.tw','playwatch.com.tw','www.rdwatch.com.tw','rdwatch.com.tw'}
 cv2.setNumThreads(1)
 
 def allowed_url(url):
@@ -208,5 +208,6 @@ def refresh_images(connect,rows,limit=120):
                     count+=1;time.sleep(1)
             return count
         finally:lock.execute('SELECT pg_advisory_unlock(68234018)')
+
 
 
