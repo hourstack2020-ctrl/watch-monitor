@@ -748,7 +748,7 @@ def comparisons():
         evidence=dial_images.load_evidence(c,rows)
         decisions=comparison_reviews.load_decisions(c)
     result=same_product_items(rows,evidence,decisions)
-    result['rules']='同品牌、同型號、同面盤；錶圈以文字、圖片或官方規格核對。資料不足或圖文有差異的配對亦列入，另標示待核對並查官方規格。年份、錶況、錶帶差異另外標示。'
+    result['rules']='同品牌、同型號、同面盤；錶圈以文字、圖片或官方規格核對。待核對配對暫不顯示，核對通過後自動列入。年份、錶況、錶帶差異另外標示。'
     return jsonify(result)
 
 @app.get('/comparison-display.js')
