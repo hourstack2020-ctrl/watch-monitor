@@ -7,7 +7,6 @@ import comparison_reviews
 import official_references
 import bezel_checks
 import dial_images
-import watchstore_source
 import requests, psycopg
 import base64
 from pwa_assets import ICONS, SERVICE_WORKER
@@ -18,7 +17,7 @@ app=Flask(__name__)
 app.config.update(SECRET_KEY=os.getenv('SESSION_SECRET'),SESSION_COOKIE_NAME='hs_session',SESSION_COOKIE_SECURE=True,SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Lax',PERMANENT_SESSION_LIFETIME=timedelta(days=30))
 logging.basicConfig(level=logging.INFO)
 BASELINE_SITE='鐘點站'
-SITES={'鐘點站':'https://www.hourstack.com.tw/product.asp','永生':'https://www.egps.com.tw/','玩錶舍':'https://www.playwatch.com.tw/','雷達站':'https://www.rdwatch.com.tw/',watchstore_source.SITE:watchstore_source.ROOT}
+SITES={'鐘點站':'https://www.hourstack.com.tw/product.asp','永生':'https://www.egps.com.tw/','玩錶舍':'https://www.playwatch.com.tw/','雷達站':'https://www.rdwatch.com.tw/'}
 BRANDS={'ROLEX':'Rolex','PATEK PHILIPPE':'Patek Philippe','AUDEMARS PIGUET':'Audemars Piguet','OMEGA':'Omega','CARTIER':'Cartier','IWC':'IWC','HUBLOT':'Hublot','GRAND SEIKO':'Grand Seiko','CHOPARD':'Chopard','ZENITH':'Zenith','RICHARD MILLE':'Richard Mille','VACHERON CONSTANTIN':'Vacheron Constantin','JAEGER':'Jaeger-LeCoultre','FRANCK MULLER':'Franck Muller','TUDOR':'Tudor','PANERAI':'Panerai','BVLGARI':'Bvlgari','朗格':'A. Lange & Söhne'}
 MODEL=re.compile(r'(?<![A-Za-z0-9])(?:[A-Z]{0,5}\d{3,8}[A-Z]{0,5}(?:[./-][A-Z0-9]{1,12}){0,4}|\d{2,6}[./-][A-Z0-9]{2,10}(?:[./-][A-Z0-9]{2,12}){0,3})(?![A-Za-z0-9])',re.I)
 BRANDS.update({'GRANDSEIKO':'Grand Seiko','BLANCPAIN':'Blancpain','BREGUET':'Breguet','BREITLING':'Breitling','BOVET':'Bovet','BELL & ROSS':'Bell & Ross','CHANEL':'Chanel','DIOR':'Dior','DANIEL ROTH':'Daniel Roth','GIRARD':'Girard-Perregaux','GLASHUTTE':'Glashütte Original','格拉蘇蒂':'Glashütte Original','MOSER':'H. Moser & Cie.','HAUTLENCE':'Hautlence','JAQUET DROZ':'Jaquet Droz','JACOB':'Jacob & Co.','LONGINES':'Longines','MONTBLANC':'Montblanc','MAURICE LACROIX':'Maurice Lacroix','MIDO':'Mido','ORIS':'Oris','PARMIGIANI':'Parmigiani Fleurier','PIAGET':'Piaget','ROGER DUBUIS':'Roger Dubuis','SEIKO':'Seiko','TAG HEUER':'TAG Heuer','ULYSSE NARDIN':'Ulysse Nardin'})
@@ -206,11 +205,6 @@ def strap_of(title):
     return styles[0] if len(set(styles))==1 else ''
 
 def item_strap(item,normalized=False):
-    explicit=watchstore_source.stored_strap(item.get('title') or '') if item.get('site')==watchstore_source.SITE else None
-    if explicit is not None:
-        # Detail fields take priority over shorthand strap descriptions in titles.
-        canonical=strap_of(explicit)
-        return canonical if normalized else (canonical or (explicit if explicit!='未提供' else ''))
     return strap_of(item.get('title') or '')
 
 # User-confirmed dial colours apply only to these exact listings, not every 126334.
@@ -548,19 +542,6 @@ def fetch_page(session,url):
 def extract(site,url,session):
     r=fetch_page(session,url);r.encoding=r.apparent_encoding
     soup=BeautifulSoup(r.text,'html.parser')
-    if site==watchstore_source.SITE:
-        rows=watchstore_source.parse_inventory(soup,url,brand_of,model_of)
-        enriched=[];soup.watchstore_errors=[]
-        for item in rows:
-            try:
-                detail=fetch_page(session,item['url']);detail.encoding=detail.apparent_encoding
-                fields=watchstore_source.parse_details(BeautifulSoup(detail.text,'html.parser'))
-                enriched.append(watchstore_source.apply_details(item,fields))
-            except Exception as exc:
-                # Retain the old record rather than replacing trusted details with title guesses.
-                soup.watchstore_errors.append(f"{item['url']}: {str(exc)[:120]}")
-            time.sleep(float(os.getenv('CRAWL_DELAY_SECONDS','2')))
-        return enriched,soup
     images=product_images(soup,url)
     for x in soup(['script','style','noscript']):x.decompose()
     results={}
@@ -646,9 +627,6 @@ def _crawl():
                 try:rows,soup=extract(site,url,session)
                 except Exception as e:
                     site_errors.append(f'{url}: {str(e)[:120]}');continue
-                if site==watchstore_source.SITE:site_errors.extend(soup.watchstore_errors)
-                if site==watchstore_source.SITE and rows and all(x['url'] in seen for x in rows):
-                    site_errors.append(f'{url}: repeated inventory page; coverage is incomplete');continue
                 now=datetime.now(timezone.utc)
                 with connect() as c:
                     previous={r[0]:r[1:] for r in c.execute('SELECT url,price,status,title,model,year,condition FROM watches WHERE site=%s AND url=ANY(%s)',(site,[x['url'] for x in rows])).fetchall()}
@@ -666,10 +644,7 @@ def _crawl():
                         cur.executemany('''INSERT INTO watches(site,url,title,brand,model,year,condition,price,price_text,updated,last_seen,status,image_url,missing_runs) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0) ON CONFLICT(site,url) DO UPDATE SET activity_at=CASE WHEN watches.status='possibly_removed' OR ROW(watches.price,watches.title,watches.model,watches.year,watches.condition) IS DISTINCT FROM ROW(EXCLUDED.price,EXCLUDED.title,EXCLUDED.model,EXCLUDED.year,EXCLUDED.condition) THEN EXCLUDED.updated ELSE watches.activity_at END,title=EXCLUDED.title,brand=EXCLUDED.brand,model=EXCLUDED.model,year=EXCLUDED.year,condition=EXCLUDED.condition,price_changed_at=CASE WHEN watches.price IS NOT NULL AND EXCLUDED.price IS NOT NULL AND watches.price<>EXCLUDED.price THEN EXCLUDED.updated ELSE watches.price_changed_at END,price=EXCLUDED.price,price_text=EXCLUDED.price_text,updated=EXCLUDED.updated,last_seen=EXCLUDED.last_seen,status=EXCLUDED.status,image_url=COALESCE(NULLIF(EXCLUDED.image_url,''),watches.image_url),missing_runs=0''',writes)
                         cur.executemany('INSERT INTO history(site,url,price,checked) VALUES(%s,%s,%s,%s)',price_changes)
                         cur.executemany('INSERT INTO listing_events(site,url,event_type,title,brand,model,year,condition,price,image_url,detected_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING',listing_changes)
-                if site==watchstore_source.SITE:
-                    next_pages=watchstore_source.pagination(soup,url)
-                else:
-                    next_pages=[urllib.parse.urljoin(url,a['href']).split('#')[0] for a in soup.find_all('a',href=True) if re.fullmatch(r'\d{1,3}',a.get_text(' ',strip=True))]
+                next_pages=[urllib.parse.urljoin(url,a['href']).split('#')[0] for a in soup.find_all('a',href=True) if re.fullmatch(r'\d{1,3}',a.get_text(' ',strip=True))]
                 for nxt in next_pages:
                     if urllib.parse.urlparse(nxt).netloc==urllib.parse.urlparse(root).netloc and nxt not in visited and nxt not in queue:queue.append(nxt)
                 time.sleep(float(os.getenv('CRAWL_DELAY_SECONDS','2')))
@@ -962,6 +937,7 @@ if __name__=='__main__':
 # One background cache fill on web startup; advisory lock prevents duplicate workers.
 if __name__=='app' and os.environ.get('DATABASE_URL'):
     subprocess.Popen([sys.executable,os.path.abspath(__file__),'analyze-dials'],cwd=app.root_path)
+
 
 
 
