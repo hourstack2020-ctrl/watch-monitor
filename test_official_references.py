@@ -2,7 +2,7 @@ import ast,json,re,unittest,urllib.parse
 from pathlib import Path
 from unittest.mock import patch
 import official_references as official
-import bezel_checks,dial_images,watchstore_source
+import bezel_checks,dial_images
 import comparison_reviews
 
 def application_rules():
@@ -13,7 +13,7 @@ def application_rules():
     nodes=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in names or
         isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id in {'BRANDS','MODEL','BASELINE_SITE','CONFIRMED_DIAL_COLORS'} for t in n.targets)]
     context=dict(re=re,urllib=urllib,dial_images=dial_images,bezel_checks=bezel_checks,
-        comparison_reviews=comparison_reviews,official_references=official,watchstore_source=watchstore_source)
+        comparison_reviews=comparison_reviews,official_references=official)
     exec(compile(ast.Module(body=nodes,type_ignores=[]),'app_rules','exec'),context)
     return context
 
@@ -93,4 +93,5 @@ class OfficialChecks(unittest.TestCase):
         self.assertNotEqual(rules['dial_color_of'](text.replace('-010','-001')),'斑馬紋')
 
 if __name__=='__main__':unittest.main()
+
 
