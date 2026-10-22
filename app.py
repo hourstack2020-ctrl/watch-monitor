@@ -82,7 +82,7 @@ def model_of(t):
     if brand in patterns:
         matches=list(re.finditer(patterns[brand],u))
         # A title may start with an abbreviated reference before the full one.
-        match=max(matches,key=lambda m:len(m.group())) if brand=='Audemars Piguet' and matches else (matches[0] if matches else None)
+        match=max(matches,key=lambda m:len(m.group())) if brand in {'Audemars Piguet','Patek Philippe'} and matches else (matches[0] if matches else None)
         return re.sub(r'\s+','',match.group()) if match else ''
     for m in MODEL.finditer(t):
         s=m.group().upper()
@@ -309,10 +309,20 @@ def lower_price_items(rows,image_evidence=None,review_decisions=None):
 def same_product_items(rows,image_evidence=None,review_decisions=None):
     if image_evidence is not None:return reviewed_comparisons(rows,image_evidence,review_decisions or {})
     baseline={};competitors=[];grouped={}
+    # Missing dial text must reach review instead of disappearing before image
+    # checks. Only join a known dial when this exact reference has one variant.
+    known_dials={}
+    for row in rows:
+        if row.get('missing_runs',0)>0 or row.get('status')=='possibly_removed' or not row.get('price') or row['price']<=0:continue
+        dial=item_dial_color(row)
+        if dial:known_dials.setdefault((brand_of(row['title']),model_of(row['title'])),set()).add(dial)
     for row in rows:
         if row.get('missing_runs',0)>0 or row.get('status')=='possibly_removed' or not row.get('price') or row['price']<=0:continue
         brand=brand_of(row['title']);model=model_of(row['title']);dial=item_dial_color(row)
-        if brand=='其他' or not model or not dial:continue
+        if brand=='其他' or not model:continue
+        if not dial:
+            variants=known_dials.get((brand,model),set())
+            dial=next(iter(variants)) if len(variants)==1 else '未註明'
         normalized=re.sub(r'[^A-Z0-9]','',model.upper())
         if brand=='Panerai':normalized='PAM'+str(int(normalized[3:]))
         visual=visual_bucket(row,image_evidence)
@@ -364,6 +374,8 @@ def reviewed_comparisons(rows,evidence,decisions):
         for b in clocks:
             for o in others:
                 value=comparison_reviews.pair_state(b,o,dial,model_of(b['title']),evidence,decisions)
+                if value[1]!='rejected' and (not item_dial_color(b) or not item_dial_color(o)):
+                    value=(value[0],'pending','面盤文字資料不足，列入比價並待圖片或官方規格核對')
                 states[(b['url'],o['site'],o['url'])]=value
                 key,choice,reason=value
                 if choice in ('pending','analysing'):waiting.add(key)
