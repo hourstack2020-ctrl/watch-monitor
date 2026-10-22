@@ -58,10 +58,25 @@ class OfficialChecks(unittest.TestCase):
         self.assertEqual(official.verify_page(self.spec,good)['status'],'verified')
         self.assertEqual(official.verify_page(self.spec,good.replace(b'black ceramic',b'green ceramic'))['status'],'pending')
 
-    def test_pending_pair_not_in_groups_or_price_comparison(self):
+    def test_pending_pair_included_with_verification_note(self):
         rules=application_rules();result=rules['same_product_items']([self.b,self.o],{}, {})
-        self.assertEqual(result['groups'],[]);self.assertEqual(result['items'],[])
+        self.assertEqual(len(result['groups']),1);self.assertEqual(len(result['items']),1)
+        self.assertEqual(result['groups'][0]['unverified_count'],1)
+        self.assertTrue(all('待核對' in x['comparison_note'] for x in result['groups'][0]['listings']))
         self.assertEqual(result['image_pending_count'],1)
+
+    def test_image_conflict_shown_without_claiming_official_approval(self):
+        rules=application_rules();e=dict(self.verified,b=dict(status='analysed',family='green',tone='light'))
+        result=rules['same_product_items']([self.b,self.o],e,{})
+        self.assertEqual(len(result['groups']),1)
+        for row in result['groups'][0]['listings']:
+            self.assertIn('待核對',row['comparison_note'])
+            self.assertNotIn('official_source_url',row)
+
+    def test_rejected_pair_stays_excluded(self):
+        rules=application_rules();key=comparison_reviews.review_key(self.b,self.o,'黑','126610LN',{})
+        result=rules['same_product_items']([self.b,self.o],{},{key:'rejected'})
+        self.assertEqual(result['groups'],[]);self.assertEqual(result['items'],[])
 
     def test_officially_verified_pair_visible_with_source_and_timestamp(self):
         rules=application_rules();result=rules['same_product_items']([self.b,self.o],self.verified,{})
@@ -78,3 +93,4 @@ class OfficialChecks(unittest.TestCase):
         self.assertNotEqual(rules['dial_color_of'](text.replace('-010','-001')),'斑馬紋')
 
 if __name__=='__main__':unittest.main()
+
