@@ -352,7 +352,9 @@ def same_product_items(rows,image_evidence=None,review_decisions=None):
 
 
 def reviewed_comparisons(rows,evidence,decisions):
-    raw=same_product_items(rows)
+    # Retain whether the dial came from this listing's text. A group label
+    # borrowed from another listing is only a candidate for image verification.
+    raw=same_product_items([dict(x,_comparison_dial_text=item_dial_color(x)) for x in rows])
     groups,items,waiting=[],[],set()
     review_items={}
     for x in image_comparison_candidates(rows):
@@ -368,8 +370,6 @@ def reviewed_comparisons(rows,evidence,decisions):
         for b in clocks:
             for o in others:
                 value=comparison_reviews.pair_state(b,o,dial,model_of(b['title']),evidence,decisions)
-                if value[1]!='rejected' and (not item_dial_color(b) or not item_dial_color(o)):
-                    value=(value[0],'pending','面盤文字資料不足，等待圖片或官方規格核對')
                 states[(b['url'],o['site'],o['url'])]=value
                 key,choice,reason=value
                 if choice in ('pending','analysing'):waiting.add(key)
@@ -748,7 +748,7 @@ def comparisons():
         evidence=dial_images.load_evidence(c,rows)
         decisions=comparison_reviews.load_decisions(c)
     result=same_product_items(rows,evidence,decisions)
-    result['rules']='同品牌、同型號、同面盤；錶圈以文字、圖片或官方規格核對。待核對配對暫不顯示，核對通過後自動列入。年份、錶況、錶帶差異另外標示。'
+    result['rules']='同品牌、同型號；面盤文字或圖片任一符合即可比價，錶圈文字或圖片任一符合。兩者皆無法確認才暫不顯示。年份、錶況、錶帶差異另外標示。'
     return jsonify(result)
 
 @app.get('/comparison-display.js')
@@ -937,6 +937,7 @@ if __name__=='__main__':
 # One background cache fill on web startup; advisory lock prevents duplicate workers.
 if __name__=='app' and os.environ.get('DATABASE_URL'):
     subprocess.Popen([sys.executable,os.path.abspath(__file__),'analyze-dials'],cwd=app.root_path)
+
 
 
 
