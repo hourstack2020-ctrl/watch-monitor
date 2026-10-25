@@ -1,11 +1,13 @@
 """Bezel text matching and conservative, local photo feature verification."""
 import base64
 import re
+from functools import lru_cache
 import cv2
 import numpy as np
 
 VERSION=1
 
+@lru_cache(maxsize=8192)
 def text_attributes(title):
     text=re.sub(r'\s+','',title or '').upper()
     result={}
@@ -69,6 +71,19 @@ def images_match(left,right):
     except (KeyError,ValueError,TypeError,cv2.error):return False
 
 def match(left,right,evidence):
+    if evidence is None:return _match(left,right,evidence)
+    # One request compares the same photos in pair selection, cluster output,
+    # price differences and listing badges. Run expensive ORB matching once.
+    cache=evidence.setdefault('__bezel_matches__',{})
+    key=tuple(sorted(((left.get('image_url') or '',left.get('title') or ''),
+                      (right.get('image_url') or '',right.get('title') or ''))))
+    if key not in cache:cache[key]=_match(left,right,evidence)
+    result=dict(cache[key])
+    # The match is symmetric; its displayed label belongs to the requested row.
+    result['label']=text_label(left)
+    return result
+
+def _match(left,right,evidence):
     a=text_attributes(left.get('title'));b=text_attributes(right.get('title'))
     shared=set(a)&set(b)
     text_match=bool(shared) and all(a[k]==b[k] for k in shared)
@@ -85,3 +100,4 @@ def listing_info(row,listings,evidence):
     label=text_label(row)
     if label=='未辨識' and any('圖片' in x for x in methods):label='圖片已確認'
     return {'bezel':label,'bezel_method':method}
+
