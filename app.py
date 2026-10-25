@@ -1,7 +1,8 @@
 import os, re, json, time, hmac, hashlib, logging, urllib.parse, subprocess, sys
 from datetime import datetime, timezone, date, timedelta
 from zoneinfo import ZoneInfo
-from functools import wraps
+from functools import wraps, lru_cache
+from comparison_cache import ComparisonResponseCache
 from flask import Flask, request, jsonify, Response, send_file, session
 import comparison_reviews
 import official_references
@@ -17,6 +18,7 @@ app=Flask(__name__)
 app.config.update(SECRET_KEY=os.getenv('SESSION_SECRET'),SESSION_COOKIE_NAME='hs_session',SESSION_COOKIE_SECURE=True,SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Lax',PERMANENT_SESSION_LIFETIME=timedelta(days=30))
 logging.basicConfig(level=logging.INFO)
 BASELINE_SITE='鐘點站'
+comparison_responses=ComparisonResponseCache()
 SITES={'鐘點站':'https://www.hourstack.com.tw/product.asp','永生':'https://www.egps.com.tw/','玩錶舍':'https://www.playwatch.com.tw/','雷達站':'https://www.rdwatch.com.tw/'}
 BRANDS={'ROLEX':'Rolex','PATEK PHILIPPE':'Patek Philippe','AUDEMARS PIGUET':'Audemars Piguet','OMEGA':'Omega','CARTIER':'Cartier','IWC':'IWC','HUBLOT':'Hublot','GRAND SEIKO':'Grand Seiko','CHOPARD':'Chopard','ZENITH':'Zenith','RICHARD MILLE':'Richard Mille','VACHERON CONSTANTIN':'Vacheron Constantin','JAEGER':'Jaeger-LeCoultre','FRANCK MULLER':'Franck Muller','TUDOR':'Tudor','PANERAI':'Panerai','BVLGARI':'Bvlgari','朗格':'A. Lange & Söhne'}
 MODEL=re.compile(r'(?<![A-Za-z0-9])(?:[A-Z]{0,5}\d{3,8}[A-Z]{0,5}(?:[./-][A-Z0-9]{1,12}){0,4}|\d{2,6}[./-][A-Z0-9]{2,10}(?:[./-][A-Z0-9]{2,12}){0,3})(?![A-Za-z0-9])',re.I)
@@ -55,11 +57,13 @@ def protected(fn):
         return fn(*a,**kw)
     return inner
 
+@lru_cache(maxsize=8192)
 def brand_of(t):
     u=t.upper()
     matches=[(u.index(k),-len(k),v) for k,v in BRANDS.items() if k in u]
     return min(matches)[2] if matches else '其他'
 
+@lru_cache(maxsize=8192)
 def model_of(t):
     u=t.upper()
     brand=brand_of(t)
@@ -90,6 +94,7 @@ def model_of(t):
         if not re.fullmatch(r'20\d{2}|\d{2,3}MM|\d{1,3}',s):return s
     return ''
 
+@lru_cache(maxsize=8192)
 def dial_color_of(title):
     source_reference=model_of(title)
     title=re.sub(r'\s+','',title)
@@ -182,6 +187,7 @@ def condition_grade(value):
     m=re.match(r'(\d\.\d{1,2})成新',value)
     return m[1]+'成新' if m else ''
 
+@lru_cache(maxsize=8192)
 def strap_of(title):
     title=re.sub(r'\s+','',title).upper()
     styles=[]
@@ -740,16 +746,35 @@ def status():
 @app.get('/api/comparisons')
 @protected
 def comparisons():
+    started=time.monotonic()
     with connect() as c:
         records=c.execute('SELECT site,url,title,brand,model,year,condition,price,image_url,updated,status,missing_runs FROM watches WHERE price > 0 AND missing_runs=0').fetchall()
+        revision=c.execute('''SELECT
+            (SELECT max(checked_at) FROM dial_image_analysis),
+            (SELECT count(*) FROM dial_image_analysis),
+            (SELECT max(checked_at) FROM official_reference_checks),
+            (SELECT count(*) FROM official_reference_checks),
+            (SELECT max(coalesce(decided_at,created_at)) FROM comparison_reviews),
+            (SELECT count(*) FROM comparison_reviews)''').fetchone()
     fields=['site','url','title','brand','model','year','condition','price','image_url','updated','status','missing_runs']
     rows=[dict(zip(fields,[v.isoformat() if isinstance(v,datetime) else v for v in r])) for r in records]
-    with connect() as c:
-        evidence=dial_images.load_evidence(c,rows)
-        decisions=comparison_reviews.load_decisions(c)
-    result=same_product_items(rows,evidence,decisions)
-    result['rules']='同品牌、同型號；面盤文字或圖片任一符合即可比價，錶圈文字或圖片任一符合。兩者皆無法確認才暫不顯示。年份、錶況、錶帶差異另外標示。'
-    return jsonify(result)
+    key=hashlib.sha256(json.dumps([sorted(rows,key=lambda x:(x['site'],x['url'])),revision],ensure_ascii=False,default=str,separators=(',',':')).encode()).hexdigest()
+    def build():
+        with connect() as c:
+            evidence=dial_images.load_evidence(c,rows)
+            decisions=comparison_reviews.load_decisions(c)
+        result=same_product_items(rows,evidence,decisions)
+        result['rules']='同品牌、同型號；面盤文字或圖片任一符合即可比價，錶圈文字或圖片任一符合。兩者皆無法確認才暫不顯示。年份、錶況、錶帶差異另外標示。'
+        return result
+    (raw,compressed),hit=comparison_responses.get(key,build)
+    use_gzip=request.accept_encodings['gzip']>0
+    response=Response(compressed if use_gzip else raw,content_type='application/json; charset=utf-8')
+    if use_gzip:response.headers['Content-Encoding']='gzip'
+    response.headers['Vary']='Accept-Encoding'
+    response.headers['Cache-Control']='private, no-store'
+    response.headers['Server-Timing']=f'comparison;dur={(time.monotonic()-started)*1000:.1f}'
+    logging.info('Comparison response: cache=%s raw=%d gzip=%d duration_ms=%.1f',hit,len(raw),len(compressed),(time.monotonic()-started)*1000)
+    return response
 
 @app.get('/comparison-display.js')
 @protected
@@ -937,6 +962,7 @@ if __name__=='__main__':
 # One background cache fill on web startup; advisory lock prevents duplicate workers.
 if __name__=='app' and os.environ.get('DATABASE_URL'):
     subprocess.Popen([sys.executable,os.path.abspath(__file__),'analyze-dials'],cwd=app.root_path)
+
 
 
 
